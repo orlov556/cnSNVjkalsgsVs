@@ -3,7 +3,6 @@ import asyncio
 import sqlite3
 import time
 import aiohttp
-from datetime import datetime
 from threading import Thread
 from flask import Flask, request, jsonify
 from aiogram import Bot, Dispatcher, types, F
@@ -12,11 +11,10 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.utils.web_app import check_web_app_signature
 
 # -------------------- КОНФИГ --------------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН")
-ADMIN_IDS = [int(id) for id in os.environ.get("ADMIN_IDS", "123456789").split(",")] if os.environ.get("ADMIN_IDS") else []
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(",") if id.strip()]
 
 # Кошельки для приёма средств
 WALLETS = {
@@ -26,64 +24,133 @@ WALLETS = {
 }
 
 # -------------------- БАЗА ДАННЫХ --------------------
-DB_PATH = os.environ.get("DATABASE_PATH", "exchange.db")
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-c = conn.cursor()
+# Используем Railway PostgreSQL или SQLite
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if DATABASE_URL:
+    # Если есть PostgreSQL (Railway предоставляет)
+    import psycopg2
+    conn = psycopg2.connect(DATABASE_URL)
+    c = conn.cursor()
+else:
+    # Иначе SQLite
+    DB_PATH = os.environ.get("DATABASE_PATH", "exchange.db")
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
 
-c.execute('''CREATE TABLE IF NOT EXISTS users
-             (id INTEGER PRIMARY KEY, user_id INTEGER UNIQUE, username TEXT,
-              balance REAL DEFAULT 0, ref_by INTEGER DEFAULT 0, created_at INTEGER)''')
-c.execute('''CREATE TABLE IF NOT EXISTS deposits
-             (id INTEGER PRIMARY KEY, user_id INTEGER, crypto TEXT, memo TEXT,
-              amount REAL DEFAULT 0, status TEXT, created_at INTEGER)''')
-c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
-             (id INTEGER PRIMARY KEY, user_id INTEGER, amount REAL,
-              details TEXT, status TEXT, created_at INTEGER, processed_at INTEGER)''')
-c.execute("CREATE INDEX IF NOT EXISTS idx_memo ON deposits (memo)")
+# Создаём таблицы (универсальный синтаксис)
+if DATABASE_URL:
+    # PostgreSQL
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+                 id SERIAL PRIMARY KEY,
+                 user_id BIGINT UNIQUE,
+                 username TEXT,
+                 balance REAL DEFAULT 0,
+                 ref_by BIGINT DEFAULT 0,
+                 created_at INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS deposits (
+                 id SERIAL PRIMARY KEY,
+                 user_id BIGINT,
+                 crypto TEXT,
+                 memo TEXT UNIQUE,
+                 amount REAL DEFAULT 0,
+                 status TEXT,
+                 created_at INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals (
+                 id SERIAL PRIMARY KEY,
+                 user_id BIGINT,
+                 amount REAL,
+                 details TEXT,
+                 status TEXT,
+                 created_at INTEGER,
+                 processed_at INTEGER)''')
+    c.execute("CREATE INDEX IF NOT EXISTS idx_memo ON deposits (memo)")
+else:
+    # SQLite
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (id INTEGER PRIMARY KEY, user_id INTEGER UNIQUE, username TEXT,
+                  balance REAL DEFAULT 0, ref_by INTEGER DEFAULT 0, created_at INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS deposits
+                 (id INTEGER PRIMARY KEY, user_id INTEGER, crypto TEXT, memo TEXT,
+                  amount REAL DEFAULT 0, status TEXT, created_at INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
+                 (id INTEGER PRIMARY KEY, user_id INTEGER, amount REAL,
+                  details TEXT, status TEXT, created_at INTEGER, processed_at INTEGER)''')
+    c.execute("CREATE INDEX IF NOT EXISTS idx_memo ON deposits (memo)")
 conn.commit()
 
 def get_user(user_id):
-    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    if DATABASE_URL:
+        c.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
+    else:
+        c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     return c.fetchone()
 
 def create_user(user_id, username, ref_by=None):
     if get_user(user_id):
         return
-    c.execute("INSERT INTO users (user_id, username, ref_by, created_at) VALUES (?, ?, ?, ?)",
-              (user_id, username, ref_by, int(time.time())))
+    if DATABASE_URL:
+        c.execute("INSERT INTO users (user_id, username, ref_by, created_at) VALUES (%s, %s, %s, %s)",
+                  (user_id, username, ref_by, int(time.time())))
+    else:
+        c.execute("INSERT INTO users (user_id, username, ref_by, created_at) VALUES (?, ?, ?, ?)",
+                  (user_id, username, ref_by, int(time.time())))
     conn.commit()
 
 def update_balance(user_id, amount):
-    c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+    if DATABASE_URL:
+        c.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, user_id))
+    else:
+        c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
     conn.commit()
 
 def get_balance(user_id):
-    c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    if DATABASE_URL:
+        c.execute("SELECT balance FROM users WHERE user_id = %s", (user_id,))
+    else:
+        c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     return row[0] if row else 0
 
 def add_deposit(user_id, crypto, memo):
-    c.execute("INSERT INTO deposits (user_id, crypto, memo, status, created_at) VALUES (?, ?, ?, ?, ?)",
-              (user_id, crypto, memo, 'pending', int(time.time())))
+    if DATABASE_URL:
+        c.execute("INSERT INTO deposits (user_id, crypto, memo, status, created_at) VALUES (%s, %s, %s, %s, %s)",
+                  (user_id, crypto, memo, 'pending', int(time.time())))
+    else:
+        c.execute("INSERT INTO deposits (user_id, crypto, memo, status, created_at) VALUES (?, ?, ?, ?, ?)",
+                  (user_id, crypto, memo, 'pending', int(time.time())))
     conn.commit()
     return c.lastrowid
 
 def complete_deposit(deposit_id, amount_crypto):
-    c.execute("UPDATE deposits SET amount = ?, status = 'completed' WHERE id = ?", (amount_crypto, deposit_id))
+    if DATABASE_URL:
+        c.execute("UPDATE deposits SET amount = %s, status = 'completed' WHERE id = %s", (amount_crypto, deposit_id))
+    else:
+        c.execute("UPDATE deposits SET amount = ?, status = 'completed' WHERE id = ?", (amount_crypto, deposit_id))
     conn.commit()
 
 def add_withdrawal(user_id, amount, details):
-    c.execute("INSERT INTO withdrawals (user_id, amount, details, status, created_at) VALUES (?, ?, ?, ?, ?)",
-              (user_id, amount, details, 'pending', int(time.time())))
+    if DATABASE_URL:
+        c.execute("INSERT INTO withdrawals (user_id, amount, details, status, created_at) VALUES (%s, %s, %s, %s, %s)",
+                  (user_id, amount, details, 'pending', int(time.time())))
+    else:
+        c.execute("INSERT INTO withdrawals (user_id, amount, details, status, created_at) VALUES (?, ?, ?, ?, ?)",
+                  (user_id, amount, details, 'pending', int(time.time())))
     conn.commit()
 
 def get_pending_withdrawals():
-    c.execute("SELECT id, user_id, amount, details FROM withdrawals WHERE status = 'pending'")
+    if DATABASE_URL:
+        c.execute("SELECT id, user_id, amount, details FROM withdrawals WHERE status = 'pending'")
+    else:
+        c.execute("SELECT id, user_id, amount, details FROM withdrawals WHERE status = 'pending'")
     return c.fetchall()
 
 def approve_withdrawal(withdraw_id):
-    c.execute("UPDATE withdrawals SET status = 'completed', processed_at = ? WHERE id = ?",
-              (int(time.time()), withdraw_id))
+    if DATABASE_URL:
+        c.execute("UPDATE withdrawals SET status = 'completed', processed_at = %s WHERE id = %s",
+                  (int(time.time()), withdraw_id))
+    else:
+        c.execute("UPDATE withdrawals SET status = 'completed', processed_at = ? WHERE id = ?",
+                  (int(time.time()), withdraw_id))
     conn.commit()
 
 # -------------------- КЛАВИАТУРЫ --------------------
@@ -202,7 +269,10 @@ async def withdraw_details(message: types.Message, state: FSMContext):
 @dp.message(F.text == "👥 Рефералы")
 async def referrals(message: types.Message):
     user_id = message.from_user.id
-    c.execute("SELECT COUNT(*) FROM users WHERE ref_by = ?", (user_id,))
+    if DATABASE_URL:
+        c.execute("SELECT COUNT(*) FROM users WHERE ref_by = %s", (user_id,))
+    else:
+        c.execute("SELECT COUNT(*) FROM users WHERE ref_by = ?", (user_id,))
     count = c.fetchone()[0]
     bot_info = await bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={user_id}"
@@ -254,44 +324,36 @@ async def back_to_main(message: types.Message):
 async def get_crypto_rate(crypto_type: str) -> float:
     """Получение курса криптовалюты к рублю"""
     try:
-        # Для USDT используем простой курс, для TON получаем через Binance
         if 'ton' in crypto_type:
             async with aiohttp.ClientSession() as session:
                 async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=TONUSDT") as resp:
                     data = await resp.json()
                     ton_usdt = float(data['price'])
-                    # Курс USDT/RUB (можно заменить на реальный)
                     usdt_rub = 95.0
                     return ton_usdt * usdt_rub
         else:
-            # Для USDT
-            return 95.0  # Фиксированный курс 1 USDT = 95 RUB
+            return 95.0
     except:
-        return 95.0  # Курс по умолчанию
+        return 95.0
 
 async def check_ton_transaction(memo: str) -> dict:
-    """
-    Проверка транзакций TON
-    ЗАМЕНИТЕ НА РЕАЛЬНЫЙ API!
-    """
-    # TODO: Реализовать запрос к TON Center API
-    # Пример: https://toncenter.com/api/v2/getTransactions?address=...&limit=50
-    return None  # или {'amount': 10.0}
+    """Проверка транзакций TON (заглушка)"""
+    # TODO: Реализовать API запрос
+    return None
 
 async def check_trc20_transaction(memo: str) -> dict:
-    """
-    Проверка транзакций TRC20 USDT
-    ЗАМЕНИТЕ НА РЕАЛЬНЫЙ API!
-    """
-    # TODO: Реализовать запрос к TronGrid API
-    # Пример: https://api.trongrid.io/v1/accounts/{address}/transactions/trc20
+    """Проверка транзакций TRC20 (заглушка)"""
+    # TODO: Реализовать API запрос
     return None
 
 async def check_deposits():
     """Фоновая задача проверки пополнений"""
     while True:
         try:
-            c.execute("SELECT id, user_id, crypto, memo FROM deposits WHERE status = 'pending'")
+            if DATABASE_URL:
+                c.execute("SELECT id, user_id, crypto, memo FROM deposits WHERE status = 'pending'")
+            else:
+                c.execute("SELECT id, user_id, crypto, memo FROM deposits WHERE status = 'pending'")
             pending = c.fetchall()
             for dep_id, user_id, crypto, memo in pending:
                 tx = None
@@ -311,11 +373,8 @@ async def check_deposits():
             print(f"Ошибка в check_deposits: {e}")
         await asyncio.sleep(60)
 
-# -------------------- ВЕБХУК (для Render) --------------------
+# -------------------- FLASK (для вебхука) --------------------
 app = Flask(__name__)
-
-# Храним задачу фоновой проверки
-checker_task = None
 
 @app.route('/webhook', methods=['POST'])
 async def webhook():
@@ -328,44 +387,39 @@ async def webhook():
 
 @app.route('/')
 def index():
-    return "Bot is running"
+    return "Bot is running on Railway!"
 
 @app.route('/health')
 def health():
-    """Для мониторинга (UptimeRobot)"""
     return "OK"
 
-def start_bot_polling():
-    """Запускаем бота с вебхуком вместо polling"""
+# -------------------- ЗАПУСК --------------------
+async def start_bot():
+    """Запуск бота с вебхуком"""
+    # Устанавливаем вебхук
+    app_url = os.environ.get("RAILWAY_PUBLIC_DOMAIN", f"http://localhost:{os.environ.get('PORT', 5000)}")
+    webhook_url = f"https://{app_url}/webhook" if not app_url.startswith('http') else f"{app_url}/webhook"
+    
+    await bot.set_webhook(webhook_url)
+    print(f"Webhook установлен: {webhook_url}")
+    
+    # Запускаем фоновую задачу
+    asyncio.create_task(check_deposits())
+    
+    # Держим бота активным
+    while True:
+        await asyncio.sleep(3600)
+
+# Запуск в отдельном потоке
+def run_bot_async():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
-    # Запускаем фоновую задачу проверки
-    global checker_task
-    checker_task = loop.create_task(check_deposits())
-    
-    # Устанавливаем вебхук
-    app_url = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:5000")
-    webhook_url = f"{app_url}/webhook"
-    
-    async def set_webhook():
-        await bot.set_webhook(webhook_url)
-        print(f"Webhook установлен: {webhook_url}")
-    
-    loop.run_until_complete(set_webhook())
-    
-    # Запускаем Flask (но он уже запущен, так что просто держим событийный цикл)
-    try:
-        loop.run_forever()
-    except KeyboardInterrupt:
-        print("Bot stopped")
-    finally:
-        loop.close()
+    loop.run_until_complete(start_bot())
+    loop.run_forever()
 
-# -------------------- ЗАПУСК --------------------
 if __name__ == "__main__":
-    # Запускаем бота в отдельном потоке
-    bot_thread = Thread(target=start_bot_polling, daemon=True)
+    # Запускаем бота в фоновом потоке
+    bot_thread = Thread(target=run_bot_async, daemon=True)
     bot_thread.start()
     
     # Запускаем Flask
