@@ -214,31 +214,36 @@ async def get_referral_info(user_id: int):
 
 # -------------------- ФУНКЦИИ ДЛЯ КУРСА ВАЛЮТ --------------------
 async def fetch_exchange_rates():
-    """Получает курсы TON/USDT и USDT/RUB с Binance"""
+    """Получает курсы TON и USDT к рублю"""
     global exchange_rates
     try:
         async with aiohttp.ClientSession() as session:
-            # Получаем TON/USDT
+            # 1. Получаем TON/USDT с Binance
             async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=TONUSDT") as resp:
-                data = await resp.json()
-                ton_usdt = float(data['price'])
+                if resp.status == 200:
+                    data = await resp.json()
+                    ton_usdt = float(data['price'])
+                else:
+                    logger.error(f"Ошибка Binance: {resp.status}")
+                    return
             
-            # Получаем USDT/RUB (через P2P или другой API, используем курс RUB)
-            # Binance не даёт USDT/RUB напрямую, используем примерный курс или другой API
-            # Для простоты используем фиксированный курс + динамику через другой источник
-            # Здесь используем Binance API для BUSD/RUB как пример
-            async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=BUSDRUB") as resp:
-                data = await resp.json()
-                usdt_rub = float(data['price'])
+            # 2. Получаем USDT/RUB с CoinGecko (точный рыночный курс)
+            async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=rub") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    usdt_rub = data['tether']['rub']
+                else:
+                    logger.error(f"Ошибка CoinGecko: {resp.status}")
+                    # Если CoinGecko не работает, используем запасной вариант
+                    usdt_rub = 95.0  # временная заглушка
             
-            exchange_rates['ton'] = ton_usdt * usdt_rub  # TON в рублях
-            exchange_rates['usdt'] = usdt_rub           # USDT в рублях
+            exchange_rates['ton'] = ton_usdt * usdt_rub
+            exchange_rates['usdt'] = usdt_rub
             exchange_rates['last_update'] = int(time.time())
             
-            logger.info(f"Курсы обновлены: TON = {exchange_rates['ton']:.2f} ₽, USDT = {exchange_rates['usdt']:.2f} ₽")
+            logger.info(f"✅ Курсы обновлены: TON = {exchange_rates['ton']:.2f} ₽, USDT = {exchange_rates['usdt']:.2f} ₽")
     except Exception as e:
         logger.error(f"Ошибка получения курсов: {e}")
-        # Если не получили курс, оставляем старые значения
 
 async def start_rate_updater():
     """Фоновая задача обновления курсов каждые 30 секунд"""
@@ -247,9 +252,12 @@ async def start_rate_updater():
         await asyncio.sleep(30)
 
 def get_rate_with_commission(crypto: str) -> float:
-    """Возвращает курс покупки с вычетом комиссии 3%"""
+    """
+    Возвращает курс покупки крипты у пользователя.
+    Мы забираем комиссию 3% → пользователь получает курс ниже рыночного.
+    """
     if 'ton' in crypto.lower():
-        market_rate = exchange_rates.get('ton', 500)
+        market_rate = exchange_rates.get('ton', 100)
     else:
         market_rate = exchange_rates.get('usdt', 85)
     
@@ -346,7 +354,7 @@ async def cmd_start(message: types.Message):
     
     text = (
         f"✨ *Добро пожаловать в CryptoExchangeBot!* ✨\n\n"
-        f"💱 *Актуальные курсы обмена (с комиссией {COMMISSION_PERCENT}%):*\n"
+        f"💱 *Актуальные курсы обмена:*\n"
         f"💎 TON: *{ton_rate:.2f} ₽*\n"
         f"💰 USDT: *{usdt_rate:.2f} ₽*\n\n"
         f"📌 *Как это работает:*\n"
@@ -389,7 +397,7 @@ async def exchange_menu(callback: types.CallbackQuery):
         f"💎 *TON* — {ton_rate:.2f} ₽\n"
         f"💰 *USDT (TON)* — {usdt_rate:.2f} ₽\n"
         f"💵 *USDT (TRC20)* — {usdt_rate:.2f} ₽\n\n"
-        f"⚡️ *Комиссия:* {COMMISSION_PERCENT}% за обмен\n\n"
+        f"⚡️ *Комиссия:* {COMMISSION_PERCENT}% (забираем себе)\n\n"
         f"Выберите криптовалюту для обмена:"
     )
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=exchange_menu_kb())
@@ -414,7 +422,7 @@ async def process_exchange(callback: types.CallbackQuery):
         f"🔄 *Обмен {name} на рубли*\n\n"
         f"📤 *Отправьте:*\n`{address}`\n\n"
         f"📝 *Обязательный комментарий (memo):*\n`{memo}`\n\n"
-        f"💱 *Курс обмена:* 1 {name} = {rate:.2f} ₽ (включая комиссию {COMMISSION_PERCENT}%)\n\n"
+        f"💱 *Курс обмена:* 1 {name} = {rate:.2f} ₽\n\n"
         f"⚡️ *Важно:*\n"
         f"• Переводите только {name} на указанный адрес\n"
         f"• Укажите комментарий *точно*, как выше\n"
@@ -592,16 +600,16 @@ async def admin_rates(callback: types.CallbackQuery):
         return
     ton_market = exchange_rates.get('ton', 0)
     usdt_market = exchange_rates.get('usdt', 0)
-    ton_buy = ton_market * (1 - COMMISSION_PERCENT / 100)
-    usdt_buy = usdt_market * (1 - COMMISSION_PERCENT / 100)
+    ton_buy = get_rate_with_commission('ton')
+    usdt_buy = get_rate_with_commission('usdt')
     text = (
         "📈 *Текущие курсы*\n\n"
         f"💎 *TON:*\n"
         f"  Рыночный: {ton_market:.2f} ₽\n"
-        f"  Покупка: {ton_buy:.2f} ₽ (комиссия {COMMISSION_PERCENT}%)\n\n"
+        f"  Покупка: {ton_buy:.2f} ₽ (наша выгода {COMMISSION_PERCENT}%)\n\n"
         f"💰 *USDT:*\n"
         f"  Рыночный: {usdt_market:.2f} ₽\n"
-        f"  Покупка: {usdt_buy:.2f} ₽ (комиссия {COMMISSION_PERCENT}%)\n\n"
+        f"  Покупка: {usdt_buy:.2f} ₽ (наша выгода {COMMISSION_PERCENT}%)\n\n"
         f"🔄 Обновление: каждые 30 секунд"
     )
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=admin_back_kb())
@@ -639,7 +647,7 @@ async def admin_show_withdrawals(callback: types.CallbackQuery):
         await callback.answer()
         return
     
-    # Показываем все заявки (можно доработать с пагинацией)
+    # Показываем все заявки
     for w in withdrawals:
         w_id, user_id, amount, details, status, ts = w
         date = time.strftime("%d.%m.%Y %H:%M", time.localtime(ts))
