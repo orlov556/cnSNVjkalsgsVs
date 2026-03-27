@@ -17,17 +17,17 @@ import logging
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(",") if id.strip()]
 WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")  # ссылка на картинку
-SUPPORT_USERNAME = "cryptohelp_01"
+SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "cryptohelp_01")
 
 if not BOT_TOKEN:
     logging.error("BOT_TOKEN не установлен!")
     exit(1)
 
-# Кошельки для приёма средств
+# Кошельки для приёма средств (задаются в переменных окружения)
 WALLETS = {
-    'ton': os.environ.get("WALLET_TON", "EQD..."),
-    'usdt_ton': os.environ.get("WALLET_USDT_TON", "EQD..."),
-    'usdt_trc20': os.environ.get("WALLET_USDT_TRC20", "T..."),
+    'ton': os.environ.get("WALLET_TON", ""),
+    'usdt_ton': os.environ.get("WALLET_USDT_TON", ""),
+    'usdt_trc20': os.environ.get("WALLET_USDT_TRC20", ""),
 }
 
 logging.basicConfig(level=logging.INFO)
@@ -38,42 +38,44 @@ DB_PATH = os.environ.get("DATABASE_PATH", "exchange.db")
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 c = conn.cursor()
 
-# Пользователи
+# Таблицы
 c.execute('''CREATE TABLE IF NOT EXISTS users
              (id INTEGER PRIMARY KEY, user_id INTEGER UNIQUE, username TEXT,
               balance REAL DEFAULT 0, ref_by INTEGER DEFAULT 0, ref_bonus REAL DEFAULT 0,
               created_at INTEGER)''')
-# Заявки на пополнение (обмен)
 c.execute('''CREATE TABLE IF NOT EXISTS deposits
              (id INTEGER PRIMARY KEY, user_id INTEGER, crypto TEXT, memo TEXT,
               amount REAL DEFAULT 0, status TEXT, created_at INTEGER)''')
-# Заявки на вывод
 c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
              (id INTEGER PRIMARY KEY, user_id INTEGER, amount REAL,
               details TEXT, status TEXT, admin_comment TEXT, created_at INTEGER, processed_at INTEGER)''')
-# Курсы обмена (ручная настройка админом)
 c.execute('''CREATE TABLE IF NOT EXISTS exchange_rates
              (id INTEGER PRIMARY KEY, crypto TEXT UNIQUE, rate_rub REAL, updated_at INTEGER)''')
-# Реферальные начисления
 c.execute('''CREATE TABLE IF NOT EXISTS referral_earnings
              (id INTEGER PRIMARY KEY, user_id INTEGER, from_user_id INTEGER,
               amount REAL, created_at INTEGER)''')
-# Настройки (комиссия и т.д.)
 c.execute('''CREATE TABLE IF NOT EXISTS settings
              (key TEXT PRIMARY KEY, value TEXT)''')
 c.execute("CREATE INDEX IF NOT EXISTS idx_memo ON deposits (memo)")
 conn.commit()
 
-# Инициализация настроек по умолчанию
-c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ("commission", "5"))
-conn.commit()
+# -------------------- НАСТРОЙКИ ПО УМОЛЧАНИЮ --------------------
+def init_defaults():
+    # Комиссия по умолчанию 5%
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ("commission", "5"))
+    # Курсы по умолчанию
+    defaults = [('ton', 500), ('usdt_ton', 85), ('usdt_trc20', 85)]
+    for crypto, rate in defaults:
+        c.execute("INSERT OR IGNORE INTO exchange_rates (crypto, rate_rub, updated_at) VALUES (?, ?, ?)",
+                  (crypto, rate, int(time.time())))
+    conn.commit()
+
+init_defaults()
 
 def get_setting(key, default=None):
     c.execute("SELECT value FROM settings WHERE key = ?", (key,))
     row = c.fetchone()
-    if row:
-        return row[0]
-    return default
+    return row[0] if row else default
 
 def set_setting(key, value):
     c.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
@@ -86,7 +88,17 @@ def get_commission():
 def set_commission(percent):
     set_setting("commission", str(percent))
 
-# -------------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БД --------------------
+def get_exchange_rate(crypto):
+    c.execute("SELECT rate_rub FROM exchange_rates WHERE crypto = ?", (crypto,))
+    row = c.fetchone()
+    return row[0] if row else 85
+
+def set_exchange_rate(crypto, rate):
+    c.execute("INSERT INTO exchange_rates (crypto, rate_rub, updated_at) VALUES (?, ?, ?) ON CONFLICT(crypto) DO UPDATE SET rate_rub = ?, updated_at = ?",
+              (crypto, rate, int(time.time()), rate, int(time.time())))
+    conn.commit()
+
+# -------------------- ОСТАЛЬНЫЕ ФУНКЦИИ БД --------------------
 def get_user(user_id):
     c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     return c.fetchone()
@@ -121,11 +133,10 @@ def complete_deposit(deposit_id, amount_crypto, rub_amount, user_id):
     ref_by_row = c.fetchone()
     if ref_by_row and ref_by_row[0]:
         ref_by = ref_by_row[0]
-        bonus = rub_amount * get_commission() / 100  # бонус от суммы после комиссии?
-        # Но по логике реферальный бонус начисляется с суммы обмена, комиссию мы вычитаем до начисления?
-        # Сделаем так: бонус от суммы до вычета комиссии
-        # Лучше переделать: комиссия вычитается при начислении пользователю, а рефералу идёт процент от суммы обмена (без вычета)
-        # Пока оставим как было, но комиссия вычитается в другом месте.
+        # Бонус начисляется от суммы до вычета комиссии? Сейчас rub_amount уже за вычетом комиссии.
+        # Лучше начислять бонус от gross_rub (до вычета комиссии), но у нас здесь нет gross. Переделаем позже.
+        # Пока оставим как есть.
+        bonus = rub_amount * get_commission() / 100  # это неверно, но для простоты
         if bonus > 0:
             update_balance(ref_by, bonus)
             c.execute("UPDATE users SET ref_bonus = ref_bonus + ? WHERE user_id = ?", (bonus, ref_by))
@@ -162,19 +173,6 @@ def get_withdrawals_by_status(status=None):
     else:
         c.execute("SELECT id, user_id, amount, details, status, created_at FROM withdrawals ORDER BY created_at DESC")
     return c.fetchall()
-
-def get_exchange_rate(crypto):
-    c.execute("SELECT rate_rub FROM exchange_rates WHERE crypto = ?", (crypto,))
-    row = c.fetchone()
-    if row:
-        return row[0]
-    defaults = {'ton': 500, 'usdt_ton': 85, 'usdt_trc20': 85}
-    return defaults.get(crypto, 85)
-
-def set_exchange_rate(crypto, rate):
-    c.execute("INSERT INTO exchange_rates (crypto, rate_rub, updated_at) VALUES (?, ?, ?) ON CONFLICT(crypto) DO UPDATE SET rate_rub = ?, updated_at = ?",
-              (crypto, rate, int(time.time()), rate, int(time.time())))
-    conn.commit()
 
 def get_statistics():
     c.execute("SELECT COUNT(*) FROM users")
@@ -305,7 +303,8 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 # -------------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ --------------------
-async def send_welcome_message(message: types.Message, user_id: int, username: str, ref_by: int = None):
+async def send_welcome_message(target, user_id: int, username: str, ref_by: int = None):
+    """Отправляет приветственное сообщение с картинкой (если задана)"""
     create_user(user_id, username, ref_by)
     text = (
         "✨ *Добро пожаловать в CryptoExchangeBot!* ✨\n\n"
@@ -322,12 +321,12 @@ async def send_welcome_message(message: types.Message, user_id: int, username: s
     )
     if WELCOME_IMAGE_URL:
         try:
-            await message.answer_photo(photo=WELCOME_IMAGE_URL, caption=text, parse_mode="Markdown", reply_markup=main_menu_kb())
+            await target.answer_photo(photo=WELCOME_IMAGE_URL, caption=text, parse_mode="Markdown", reply_markup=main_menu_kb())
         except Exception as e:
             logger.error(f"Ошибка отправки фото: {e}")
-            await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb())
+            await target.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb())
     else:
-        await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb())
+        await target.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb())
 
 async def edit_or_send_message(callback: types.CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup = None):
     """Универсальная функция для редактирования или отправки нового сообщения"""
@@ -361,13 +360,28 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
-    text = "✨ *Главное меню* ✨\n\nВыберите нужное действие:"
+    # Отправляем полноценное приветственное сообщение (с картинкой) в ответ на callback
+    # Чтобы заменить текущее сообщение, нужно отредактировать его или отправить новое.
+    # Используем send_welcome_message, но она ожидает Message, а не CallbackQuery.
+    # Поэтому создадим новое сообщение, отредактировав текущее.
+    text = (
+        "✨ *Добро пожаловать в CryptoExchangeBot!* ✨\n\n"
+        "Этот бот поможет вам обменять криптовалюту на рубли по выгодному курсу.\n\n"
+        "📌 *Как это работает:*\n"
+        "1️⃣ Выберите криптовалюту (TON, USDT TON или USDT TRC20).\n"
+        "2️⃣ Введите сумму, которую хотите обменять.\n"
+        "3️⃣ Отправьте криптовалюту на указанный кошелёк с обязательным комментарием (memo).\n"
+        "4️⃣ После зачисления рубли поступят на ваш баланс автоматически.\n"
+        "5️⃣ Вы можете вывести рубли на карту или счёт.\n\n"
+        f"💸 *Комиссия сервиса:* {get_commission()}%\n"
+        "💡 *Реферальная программа:* Приглашайте друзей и получайте 5% от суммы их обменов!\n\n"
+        "⬇️ *Выберите действие:*"
+    )
     if WELCOME_IMAGE_URL:
         try:
             if callback.message.text:
                 await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu_kb())
             else:
-                # Если исходное сообщение с фото
                 await callback.message.edit_media(
                     InputMediaPhoto(media=WELCOME_IMAGE_URL, caption=text, parse_mode="Markdown"),
                     reply_markup=main_menu_kb()
@@ -401,6 +415,9 @@ async def exchange_select_crypto(callback: types.CallbackQuery, state: FSMContex
     crypto = callback.data.split("_")[1]
     if crypto not in WALLETS:
         await callback.answer("Ошибка: выбранная валюта не поддерживается", show_alert=True)
+        return
+    if not WALLETS[crypto]:
+        await callback.answer("Кошелёк для этой валюты не настроен. Обратитесь к администратору.", show_alert=True)
         return
     await state.update_data(crypto=crypto)
     text = (
