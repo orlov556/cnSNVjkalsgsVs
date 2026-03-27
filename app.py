@@ -21,7 +21,7 @@ if not BOT_TOKEN:
     logging.error("BOT_TOKEN не установлен!")
     exit(1)
 
-# Кошельки
+# Кошельки - ВАЖНО: ключи должны совпадать с callback_data
 WALLETS = {
     'ton': os.environ.get("WALLET_TON", "EQD..."),
     'usdt_ton': os.environ.get("WALLET_USDT_TON", "EQD..."),
@@ -55,7 +55,6 @@ async def init_db():
     db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
     
     async with db_pool.acquire() as conn:
-        # Пользователи
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -67,7 +66,6 @@ async def init_db():
                 created_at INTEGER
             )
         ''')
-        # Заявки на пополнение
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS deposits (
                 id SERIAL PRIMARY KEY,
@@ -79,7 +77,6 @@ async def init_db():
                 created_at INTEGER
             )
         ''')
-        # Заявки на вывод
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS withdrawals (
                 id SERIAL PRIMARY KEY,
@@ -92,7 +89,6 @@ async def init_db():
                 processed_at INTEGER
             )
         ''')
-        # Реферальные начисления
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS referral_earnings (
                 id SERIAL PRIMARY KEY,
@@ -139,7 +135,6 @@ async def complete_deposit(deposit_id: int, amount_crypto: float, rub_amount: fl
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE deposits SET amount = $1, status = 'completed' WHERE id = $2", amount_crypto, deposit_id)
         
-        # Реферальный бонус
         ref_by = await conn.fetchval("SELECT ref_by FROM users WHERE user_id = $1", user_id)
         if ref_by and ref_by > 0:
             bonus = rub_amount * REFERRAL_PERCENT / 100
@@ -214,34 +209,74 @@ async def get_referral_info(user_id: int):
 
 # -------------------- ФУНКЦИИ ДЛЯ КУРСА ВАЛЮТ --------------------
 async def fetch_exchange_rates():
-    """Получает курсы TON и USDT к рублю"""
+    """Получает курсы TON и USDT к рублю (с запасными API)"""
     global exchange_rates
     try:
         async with aiohttp.ClientSession() as session:
-            # 1. Получаем TON/USDT с Binance
-            async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=TONUSDT") as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    ton_usdt = float(data['price'])
-                else:
-                    logger.error(f"Ошибка Binance: {resp.status}")
-                    return
+            # 1. Получаем TON/USDT (используем несколько источников)
+            ton_usdt = None
             
-            # 2. Получаем USDT/RUB с CoinGecko (точный рыночный курс)
-            async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=rub") as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    usdt_rub = data['tether']['rub']
-                else:
-                    logger.error(f"Ошибка CoinGecko: {resp.status}")
-                    # Если CoinGecko не работает, используем запасной вариант
-                    usdt_rub = 95.0  # временная заглушка
+            # Пробуем Bybit (работает в России)
+            try:
+                async with session.get("https://api.bybit.com/v5/market/tickers?category=spot&symbol=TONUSDT") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data['retCode'] == 0:
+                            ton_usdt = float(data['result']['list'][0]['lastPrice'])
+                            logger.info(f"TON/USDT с Bybit: {ton_usdt}")
+            except Exception as e:
+                logger.error(f"Ошибка Bybit: {e}")
+            
+            # Если Bybit не дал результат, пробуем KuCoin
+            if not ton_usdt:
+                try:
+                    async with session.get("https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=TON-USDT") as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            ton_usdt = float(data['data']['price'])
+                            logger.info(f"TON/USDT с KuCoin: {ton_usdt}")
+                except Exception as e:
+                    logger.error(f"Ошибка KuCoin: {e}")
+            
+            # Если ничего не сработало, используем фиксированный курс
+            if not ton_usdt:
+                ton_usdt = 5.5  # примерный курс TON/USDT
+                logger.warning(f"Используем фиксированный TON/USDT: {ton_usdt}")
+            
+            # 2. Получаем USDT/RUB (курс рубля)
+            usdt_rub = None
+            
+            # Пробуем CoinGecko
+            try:
+                async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=rub") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        usdt_rub = data['tether']['rub']
+                        logger.info(f"USDT/RUB с CoinGecko: {usdt_rub}")
+            except Exception as e:
+                logger.error(f"Ошибка CoinGecko: {e}")
+            
+            # Пробуем Bybit
+            if not usdt_rub:
+                try:
+                    async with session.get("https://api.bybit.com/v5/market/tickers?category=spot&symbol=USDTUSDT") as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            # Bybit не даёт USDT/RUB, используем другой подход
+                            pass
+                except:
+                    pass
+            
+            # Если не получили курс, используем фиксированный
+            if not usdt_rub:
+                usdt_rub = 95.0  # примерный курс
+                logger.warning(f"Используем фиксированный USDT/RUB: {usdt_rub}")
             
             exchange_rates['ton'] = ton_usdt * usdt_rub
             exchange_rates['usdt'] = usdt_rub
             exchange_rates['last_update'] = int(time.time())
             
-            logger.info(f"✅ Курсы обновлены: TON = {exchange_rates['ton']:.2f} ₽, USDT = {exchange_rates['usdt']:.2f} ₽")
+            logger.info(f"✅ Курсы: TON = {exchange_rates['ton']:.2f} ₽, USDT = {exchange_rates['usdt']:.2f} ₽")
     except Exception as e:
         logger.error(f"Ошибка получения курсов: {e}")
 
@@ -252,16 +287,16 @@ async def start_rate_updater():
         await asyncio.sleep(30)
 
 def get_rate_with_commission(crypto: str) -> float:
-    """
-    Возвращает курс покупки крипты у пользователя.
-    Мы забираем комиссию 3% → пользователь получает курс ниже рыночного.
-    """
+    """Возвращает курс покупки крипты у пользователя (ниже рынка на COMMISSION_PERCENT%)"""
     if 'ton' in crypto.lower():
         market_rate = exchange_rates.get('ton', 100)
     else:
         market_rate = exchange_rates.get('usdt', 85)
     
-    # Применяем комиссию 3% (забираем себе)
+    # Если курс не получен, используем запасной
+    if market_rate <= 0:
+        market_rate = 100 if 'ton' in crypto.lower() else 85
+    
     return market_rate * (1 - COMMISSION_PERCENT / 100)
 
 # -------------------- КЛАВИАТУРЫ --------------------
@@ -405,7 +440,18 @@ async def exchange_menu(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("exchange_"))
 async def process_exchange(callback: types.CallbackQuery):
-    crypto = callback.data.split("_")[1]
+    crypto = callback.data.split("_")[1]  # ton, usdt_ton, usdt_trc20
+    
+    # Проверяем, есть ли такой кошелёк
+    if crypto not in WALLETS:
+        await callback.message.edit_text(
+            "❌ Ошибка: выбранная криптовалюта не поддерживается.\nПожалуйста, выберите из списка.",
+            parse_mode="Markdown",
+            reply_markup=exchange_menu_kb()
+        )
+        await callback.answer()
+        return
+    
     user_id = callback.from_user.id
     memo = f"dep_{user_id}_{int(time.time())}"
     address = WALLETS[crypto]
@@ -647,7 +693,6 @@ async def admin_show_withdrawals(callback: types.CallbackQuery):
         await callback.answer()
         return
     
-    # Показываем все заявки
     for w in withdrawals:
         w_id, user_id, amount, details, status, ts = w
         date = time.strftime("%d.%m.%Y %H:%M", time.localtime(ts))
@@ -700,7 +745,7 @@ async def reject_withdrawal_comment(message: types.Message, state: FSMContext):
     if w:
         user_id = w['user_id']
         amount = w['amount']
-        await update_balance(user_id, amount)  # возвращаем средства
+        await update_balance(user_id, amount)
         await bot.send_message(user_id, f"❌ *Заявка на вывод #{withdraw_id}* на сумму {amount:.2f} ₽ отклонена.\nПричина: {comment}", parse_mode="Markdown")
     await message.answer(f"✅ Заявка #{withdraw_id} отклонена, средства возвращены.", reply_markup=admin_back_kb())
     await state.clear()
@@ -766,7 +811,6 @@ async def check_deposits():
                 
                 if tx and tx.get('amount', 0) > 0:
                     amount_crypto = tx['amount']
-                    # Получаем курс с комиссией
                     if 'ton' in crypto:
                         rate = get_rate_with_commission('ton')
                     else:
@@ -796,8 +840,13 @@ async def main():
     asyncio.create_task(start_rate_updater())
     asyncio.create_task(check_deposits())
     
-    # Удаляем вебхук, используем polling
-    await bot.delete_webhook()
+    # Удаляем вебхук перед запуском polling
+    try:
+        await bot.delete_webhook()
+        logger.info("Webhook удалён")
+    except Exception as e:
+        logger.error(f"Ошибка удаления вебхука: {e}")
+    
     await dp.start_polling(bot)
 
 def run_bot():
