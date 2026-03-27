@@ -7,7 +7,7 @@ from threading import Thread
 from flask import Flask, request, jsonify
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile, URLInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -16,22 +16,24 @@ import logging
 # -------------------- КОНФИГ --------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(",") if id.strip()]
-WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")  # ссылка на картинку (опционально)
-SUPPORT_USERNAME = "cryptohelp_01"  # юзернейм поддержки
+WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")
+SUPPORT_USERNAME = "cryptohelp_01"
+
+# НОВОЕ: флаг отправки уведомлений админам (по умолчанию включено)
+NOTIFY_ADMIN_ON_NEW_ORDER = True
 
 if not BOT_TOKEN:
     logging.error("BOT_TOKEN не установлен!")
     exit(1)
 
-# Кошельки для приёма средств
 WALLETS = {
     'ton': os.environ.get("WALLET_TON", "EQD..."),
     'usdt_ton': os.environ.get("WALLET_USDT_TON", "EQD..."),
     'usdt_trc20': os.environ.get("WALLET_USDT_TRC20", "T..."),
 }
 
-# Процент реферального бонуса
 REFERRAL_PERCENT = 5
+DEFAULT_COMMISSION_PERCENT = 2  # НОВОЕ: комиссия по умолчанию 2%
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -56,6 +58,9 @@ c.execute('''CREATE TABLE IF NOT EXISTS exchange_rates
 c.execute('''CREATE TABLE IF NOT EXISTS referral_earnings
              (id INTEGER PRIMARY KEY, user_id INTEGER, from_user_id INTEGER,
               amount REAL, created_at INTEGER)''')
+# НОВОЕ: таблица настроек (комиссия и другие параметры)
+c.execute('''CREATE TABLE IF NOT EXISTS settings
+             (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)''')
 c.execute("CREATE INDEX IF NOT EXISTS idx_memo ON deposits (memo)")
 conn.commit()
 
@@ -145,6 +150,29 @@ def set_exchange_rate(crypto, rate):
               (crypto, rate, int(time.time()), rate, int(time.time())))
     conn.commit()
 
+# НОВОЕ: функции для работы с настройками
+def get_setting(key, default=None):
+    c.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = c.fetchone()
+    if row:
+        return row[0]
+    return default
+
+def set_setting(key, value):
+    c.execute("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?",
+              (key, value, int(time.time()), value, int(time.time())))
+    conn.commit()
+
+def get_commission_percent():
+    val = get_setting("commission_percent", str(DEFAULT_COMMISSION_PERCENT))
+    try:
+        return float(val)
+    except:
+        return DEFAULT_COMMISSION_PERCENT
+
+def set_commission_percent(percent):
+    set_setting("commission_percent", str(percent))
+
 def get_statistics():
     c.execute("SELECT COUNT(*) FROM users")
     users_count = c.fetchone()[0]
@@ -173,9 +201,8 @@ def get_referral_info(user_id):
     bonus = row[0] if row else 0
     return invited_count, bonus
 
-# -------------------- КЛАВИАТУРЫ (только инлайн) --------------------
+# -------------------- КЛАВИАТУРЫ --------------------
 def main_menu_kb():
-    """Главное меню"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Баланс", callback_data="menu_balance")],
         [InlineKeyboardButton(text="🔄 Обмен", callback_data="menu_exchange")],
@@ -186,7 +213,6 @@ def main_menu_kb():
     ])
 
 def exchange_menu_kb():
-    """Меню выбора криптовалюты для обмена"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 TON", callback_data="exchange_ton")],
         [InlineKeyboardButton(text="💰 USDT (TON)", callback_data="exchange_usdt_ton")],
@@ -195,36 +221,38 @@ def exchange_menu_kb():
     ])
 
 def back_to_main_kb():
-    """Кнопка возврата в главное меню"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_to_main")]
     ])
 
 def cancel_kb():
-    """Кнопка отмены"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="back_to_main")]
     ])
 
 def confirm_exchange_kb():
-    """Подтверждение обмена (для суммы)"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Подтвердить", callback_data="exchange_confirm"),
          InlineKeyboardButton(text="❌ Отмена", callback_data="exchange_cancel")]
     ])
 
+def confirm_withdraw_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, подтвердить", callback_data="confirm_withdraw_yes"),
+         InlineKeyboardButton(text="❌ Отмена", callback_data="confirm_withdraw_no")]
+    ])
+
 def admin_main_kb():
-    """Главное меню администратора"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Заявки на вывод", callback_data="admin_withdrawals")],
         [InlineKeyboardButton(text="🔧 Управление курсами", callback_data="admin_rates")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_settings")],   # НОВОЕ
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="👤 Изменить баланс", callback_data="admin_balance")],
         [InlineKeyboardButton(text="◀️ Выход", callback_data="admin_exit")]
     ])
 
 def admin_withdrawals_filter_kb():
-    """Фильтры для заявок"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📌 Все", callback_data="admin_withdrawals_all"),
          InlineKeyboardButton(text="🟡 Новые", callback_data="admin_withdrawals_pending")],
@@ -234,7 +262,6 @@ def admin_withdrawals_filter_kb():
     ])
 
 def withdrawal_action_kb(withdraw_id):
-    """Кнопки для конкретной заявки"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"approve_{withdraw_id}"),
          InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{withdraw_id}")],
@@ -242,16 +269,16 @@ def withdrawal_action_kb(withdraw_id):
     ])
 
 def back_to_admin_kb():
-    """Кнопка возврата в админку"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_back")]
     ])
 
-def confirm_withdraw_kb():
-    """Подтверждение вывода"""
+# НОВОЕ: меню настроек
+def settings_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, подтвердить", callback_data="confirm_withdraw_yes"),
-         InlineKeyboardButton(text="❌ Отмена", callback_data="confirm_withdraw_no")]
+        [InlineKeyboardButton(text="💸 Комиссия", callback_data="admin_settings_commission")],
+        [InlineKeyboardButton(text="📢 Уведомления админам", callback_data="admin_settings_notify")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_back")]
     ])
 
 # -------------------- FSM --------------------
@@ -269,11 +296,14 @@ class AdminBalanceFSM(StatesGroup):
     waiting_amount = State()
 
 class AdminRateFSM(StatesGroup):
-    waiting_crypto = State()
     waiting_rate = State()
 
 class AdminRejectFSM(StatesGroup):
     waiting_comment = State()
+
+# НОВОЕ: FSM для изменения комиссии
+class AdminCommissionFSM(StatesGroup):
+    waiting_commission = State()
 
 # -------------------- БОТ --------------------
 bot = Bot(token=BOT_TOKEN)
@@ -282,7 +312,6 @@ dp = Dispatcher(storage=storage)
 
 # -------------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ --------------------
 async def send_welcome_message(message: types.Message, user_id: int, username: str, ref_by: int = None):
-    """Отправляет приветственное сообщение с картинкой"""
     create_user(user_id, username, ref_by)
     text = (
         "✨ *Добро пожаловать в CryptoExchangeBot!* ✨\n\n"
@@ -299,17 +328,14 @@ async def send_welcome_message(message: types.Message, user_id: int, username: s
     if WELCOME_IMAGE_URL:
         try:
             await message.answer_photo(photo=WELCOME_IMAGE_URL, caption=text, parse_mode="Markdown", reply_markup=main_menu_kb())
-        except:
+        except Exception as e:
+            logger.error(f"Ошибка отправки фото: {e}")
             await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb())
     else:
         await message.answer(text, parse_mode="Markdown", reply_markup=main_menu_kb())
 
 async def edit_main_menu(callback: types.CallbackQuery):
-    """Редактирует текущее сообщение, показывая главное меню с картинкой"""
-    text = (
-        "✨ *Главное меню* ✨\n\n"
-        "Выберите нужное действие:"
-    )
+    text = "✨ *Главное меню* ✨\n\nВыберите нужное действие:"
     if WELCOME_IMAGE_URL:
         try:
             await callback.message.edit_media(
@@ -321,6 +347,16 @@ async def edit_main_menu(callback: types.CallbackQuery):
     else:
         await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=main_menu_kb())
     await callback.answer()
+
+async def notify_admins(text):
+    """Отправляет сообщение всем администраторам"""
+    if not NOTIFY_ADMIN_ON_NEW_ORDER:
+        return
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
 # -------------------- ХЕНДЛЕРЫ --------------------
 @dp.message(Command("start"))
@@ -355,14 +391,15 @@ async def exchange_menu(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("exchange_"))
 async def exchange_select_crypto(callback: types.CallbackQuery, state: FSMContext):
-    crypto = callback.data.split("_")[1]  # ton, usdt_ton, usdt_trc20
+    crypto = callback.data.split("_")[1]
     if crypto not in WALLETS:
         await callback.answer("Ошибка: выбранная валюта не поддерживается", show_alert=True)
         return
     await state.update_data(crypto=crypto)
     text = (
         f"🔄 *Обмен {crypto.upper()} на рубли*\n\n"
-        f"Текущий курс: 1 {crypto.upper()} = {get_exchange_rate(crypto):.2f} ₽\n\n"
+        f"Текущий курс: 1 {crypto.upper()} = {get_exchange_rate(crypto):.2f} ₽\n"
+        f"Комиссия: {get_commission_percent()}%\n\n"
         "Введите сумму, которую хотите обменять (в криптовалюте):"
     )
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=cancel_kb())
@@ -381,11 +418,14 @@ async def exchange_amount(message: types.Message, state: FSMContext):
     data = await state.get_data()
     crypto = data['crypto']
     rate = get_exchange_rate(crypto)
-    rub_amount = amount_crypto * rate
+    commission = get_commission_percent() / 100
+    gross_rub = amount_crypto * rate
+    rub_amount = gross_rub * (1 - commission)
     text = (
         f"🔄 *Обмен {crypto.upper()}*\n\n"
         f"Сумма: {amount_crypto} {crypto.upper()}\n"
         f"Курс: 1 {crypto.upper()} = {rate:.2f} ₽\n"
+        f"Комиссия: {get_commission_percent()}%\n"
         f"Вы получите: *{rub_amount:.2f} ₽*\n\n"
         "Подтверждаете обмен?"
     )
@@ -420,6 +460,18 @@ async def exchange_confirm(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
     await state.clear()
     await callback.answer()
+
+    # НОВОЕ: уведомление админам о новом обмене
+    user = get_user(user_id)
+    username = user[2] if user else "неизвестно"
+    await notify_admins(
+        f"🔄 *Новый обмен!*\n\n"
+        f"Пользователь: @{username} (ID: {user_id})\n"
+        f"Криптовалюта: {crypto.upper()}\n"
+        f"Сумма: {amount_crypto} {crypto.upper()}\n"
+        f"К выдаче: {rub_amount:.2f} ₽\n"
+        f"Комментарий: `{memo}`"
+    )
 
 @dp.callback_query(ExchangeFSM.confirm, F.data == "exchange_cancel")
 async def exchange_cancel(callback: types.CallbackQuery, state: FSMContext):
@@ -484,8 +536,9 @@ async def withdraw_confirm(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     amount = data['amount']
     details = data['details']
-    update_balance(callback.from_user.id, -amount)
-    withdraw_id = add_withdrawal(callback.from_user.id, amount, details)
+    user_id = callback.from_user.id
+    update_balance(user_id, -amount)
+    withdraw_id = add_withdrawal(user_id, amount, details)
     text = (
         f"✅ *Заявка на вывод создана!*\n\n"
         f"Номер заявки: #{withdraw_id}\n"
@@ -496,6 +549,16 @@ async def withdraw_confirm(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=back_to_main_kb())
     await state.clear()
     await callback.answer()
+
+    # НОВОЕ: уведомление админам о новом выводе
+    user = get_user(user_id)
+    username = user[2] if user else "неизвестно"
+    await notify_admins(
+        f"💸 *Новая заявка на вывод!*\n\n"
+        f"Пользователь: @{username} (ID: {user_id})\n"
+        f"Сумма: {amount:.2f} ₽\n"
+        f"Реквизиты: `{details}`"
+    )
 
 @dp.callback_query(WithdrawFSM.confirm, F.data == "confirm_withdraw_no")
 async def withdraw_cancel(callback: types.CallbackQuery, state: FSMContext):
@@ -582,12 +645,17 @@ async def admin_show_withdrawals(callback: types.CallbackQuery):
         await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=admin_withdrawals_filter_kb())
         await callback.answer()
         return
-    # Показываем первую заявку (можно сделать пагинацию, но для простоты покажем список)
     for w in withdrawals:
         w_id, user_id, amount, details, status, ts = w
         date = time.strftime("%d.%m.%Y %H:%M", time.localtime(ts))
         await callback.message.answer(
-            f"Заявка #{w_id}\nПользователь: {user_id}\nСумма: {amount} ₽\nРеквизиты: {details}\nСтатус: {status}\nДата: {date}",
+            f"📋 *Заявка #{w_id}*\n"
+            f"👤 Пользователь: `{user_id}`\n"
+            f"💰 Сумма: {amount} ₽\n"
+            f"📝 Реквизиты: `{details}`\n"
+            f"🏷 Статус: {status}\n"
+            f"📅 Дата: {date}",
+            parse_mode="Markdown",
             reply_markup=withdrawal_action_kb(w_id)
         )
     await callback.answer()
@@ -629,7 +697,7 @@ async def reject_withdrawal_comment(message: types.Message, state: FSMContext):
     if w:
         user_id = w[1]
         amount = w[3]
-        update_balance(user_id, amount)  # возвращаем средства
+        update_balance(user_id, amount)
         await bot.send_message(user_id, f"❌ *Заявка на вывод #{withdraw_id}* на сумму {amount:.2f} ₽ отклонена.\nПричина: {comment}", parse_mode="Markdown")
     await message.answer(f"✅ Заявка #{withdraw_id} отклонена, средства возвращены.", reply_markup=back_to_admin_kb())
     await state.clear()
@@ -640,6 +708,7 @@ async def admin_stats(callback: types.CallbackQuery):
         await callback.answer("Нет прав", show_alert=True)
         return
     users_count, total_deposits, total_withdrawals, referred_count, total_ref_bonus = get_statistics()
+    commission = get_commission_percent()
     text = (
         "📊 *Статистика*\n\n"
         f"👥 Пользователей: {users_count}\n"
@@ -647,7 +716,8 @@ async def admin_stats(callback: types.CallbackQuery):
         f"💰 Всего пополнений (обменов): {total_deposits:.2f} ₽\n"
         f"💸 Всего выводов: {total_withdrawals:.2f} ₽\n"
         f"💵 В обороте: {total_deposits - total_withdrawals:.2f} ₽\n"
-        f"🎁 Выплачено реферальных бонусов: {total_ref_bonus:.2f} ₽"
+        f"🎁 Выплачено реферальных бонусов: {total_ref_bonus:.2f} ₽\n"
+        f"⚙️ Комиссия: {commission}%"
     )
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=back_to_admin_kb())
     await callback.answer()
@@ -730,6 +800,40 @@ async def admin_balance_amount(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Баланс пользователя {user_id} изменён на {amount:.2f} ₽.\nНовый баланс: {new_balance:.2f} ₽", reply_markup=back_to_admin_kb())
     await state.clear()
 
+# НОВОЕ: меню настроек
+@dp.callback_query(F.data == "admin_settings")
+async def admin_settings(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет прав", show_alert=True)
+        return
+    text = "⚙️ *Настройки*\n\nВыберите параметр для изменения:"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=settings_menu_kb())
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_settings_commission")
+async def admin_settings_commission(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет прав", show_alert=True)
+        return
+    current = get_commission_percent()
+    text = f"💸 *Комиссия*\n\nТекущая комиссия: {current}%\nВведите новое значение (от 0 до 100):"
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=back_to_admin_kb())
+    await state.set_state(AdminCommissionFSM.waiting_commission)
+    await callback.answer()
+
+@dp.message(AdminCommissionFSM.waiting_commission)
+async def admin_set_commission(message: types.Message, state: FSMContext):
+    try:
+        commission = float(message.text)
+        if commission < 0 or commission > 100:
+            raise ValueError
+    except:
+        await message.answer("❌ Введите число от 0 до 100.")
+        return
+    set_commission_percent(commission)
+    await message.answer(f"✅ Комиссия установлена: {commission}%", reply_markup=back_to_admin_kb())
+    await state.clear()
+
 # -------------------- ФОНОВАЯ ПРОВЕРКА ПОПОЛНЕНИЙ --------------------
 async def check_ton_transaction(memo: str) -> dict:
     """Проверка транзакций TON (заглушка)"""
@@ -756,10 +860,12 @@ async def check_deposits():
                 if tx and tx.get('amount', 0) >= expected_amount:
                     amount_crypto = tx['amount']
                     rate = get_exchange_rate(crypto)
-                    rub_amount = amount_crypto * rate
+                    commission = get_commission_percent() / 100
+                    gross_rub = amount_crypto * rate
+                    rub_amount = gross_rub * (1 - commission)
                     update_balance(user_id, rub_amount)
                     complete_deposit(dep_id, amount_crypto, rub_amount, user_id)
-                    await bot.send_message(user_id, f"✅ *Обмен выполнен!*\n\nЗачислено {rub_amount:.2f} ₽ по курсу {rate:.2f} ₽ за {crypto}.", parse_mode="Markdown")
+                    await bot.send_message(user_id, f"✅ *Обмен выполнен!*\n\nЗачислено {rub_amount:.2f} ₽ по курсу {rate:.2f} ₽ за {crypto} (комиссия {get_commission_percent()}%).", parse_mode="Markdown")
         except Exception as e:
             logger.error(f"Ошибка в check_deposits: {e}")
         await asyncio.sleep(60)
