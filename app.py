@@ -466,7 +466,6 @@ async def edit_or_send(cb, text, markup=None):
         else:
             await cb.message.edit_caption(caption=text, parse_mode="Markdown", reply_markup=markup)
     except Exception as e:
-        # Если не удалось отредактировать, отправляем новое сообщение
         if "message is not modified" not in str(e):
             await cb.message.answer(text, parse_mode="Markdown", reply_markup=markup)
     await cb.answer()
@@ -502,13 +501,10 @@ async def exchange_menu(cb: types.CallbackQuery, state: FSMContext):
         "💵 *USDT (TRC20)* - стейблкоин в сети TRON (мин. 1 USDT)",
         exchange_kb())
 
-# ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА КРИПТОВАЛЮТЫ
 @dp.callback_query(F.data.startswith("exch_"))
 async def exch_select(cb: types.CallbackQuery, state: FSMContext):
-    # Получаем всё после "exch_"
     crypto = cb.data[5:]  # "ton", "usdt_ton", "usdt_trc20"
     
-    # Проверяем, есть ли такой ключ в словаре кошельков
     if crypto not in WALLETS:
         await cb.answer(f"❌ Ошибка: валюта {crypto} не найдена", show_alert=True)
         return
@@ -568,33 +564,10 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
     address = WALLETS[crypto]
     deposit_id = add_deposit(user_id, crypto, memo, amount)
     
-    # USDT - ручное подтверждение
-    if crypto in ('usdt_ton', 'usdt_trc20'):
-        # Отправляем новое сообщение с инструкцией, а старое удаляем
-        await cb.message.delete()
-        text = (
-            f"🔄 *Обмен {crypto.upper()}*\n\n"
-            f"📤 *Отправьте на адрес*\n`{address}`\n\n"
-            f"📝 *Обязательный комментарий (memo)*\n`{memo}`\n\n"
-            f"💰 Вы получите: {net:.2f} ₽ (после вычета комиссии)\n\n"
-            f"⚡️ *Важно*\n"
-            f"• Переводите только {crypto.upper()} на указанный адрес\n"
-            f"• Укажите комментарий точно, как выше\n"
-            f"• После отправки нажмите кнопку «Проверить обмен»\n\n"
-            f"⏱ Ссылка на проверку будет доступна после оплаты."
-        )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔍 Проверить обмен", callback_data=f"check_usdt_{deposit_id}")],
-            [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]
-        ])
-        await cb.message.answer(text, parse_mode="Markdown", reply_markup=kb)
-        await state.clear()
-        await cb.answer()
-        return
-    
-    # TON - автоматическая проверка
-    # Отправляем новое сообщение с инструкцией, а старое удаляем
+    # Удаляем старое сообщение с подтверждением
     await cb.message.delete()
+    
+    # Формируем текст инструкции
     text = (
         f"🔄 *Обмен {crypto.upper()}*\n\n"
         f"📤 *Отправьте на адрес*\n`{address}`\n\n"
@@ -603,10 +576,22 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
         f"⚡️ *Важно*\n"
         f"• Переводите только {crypto.upper()} на указанный адрес\n"
         f"• Укажите комментарий точно, как выше\n"
-        f"• После зачисления рубли поступят на ваш баланс автоматически\n\n"
-        f"⏱ Обычно зачисление занимает 1-5 минут."
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]])
+    
+    # Для USDT добавляем кнопку проверки
+    if crypto in ('usdt_ton', 'usdt_trc20'):
+        text += f"• После отправки нажмите кнопку «Проверить обмен»\n\n"
+        text += f"⏱ Ожидайте подтверждения администратора."
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔍 Проверить обмен", callback_data=f"check_usdt_{deposit_id}")],
+            [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]
+        ])
+    else:
+        # Для TON - автоматическая проверка
+        text += f"• После зачисления рубли поступят на ваш баланс автоматически\n\n"
+        text += f"⏱ Обычно зачисление занимает 1-5 минут."
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]])
+    
     await cb.message.answer(text, parse_mode="Markdown", reply_markup=kb)
     await state.clear()
     await cb.answer()
@@ -631,6 +616,7 @@ async def check_usdt(cb: types.CallbackQuery):
     gross = dep[4] * rate
     net = gross - gross * get_commission() / 100
     
+    # Отправляем уведомление администраторам
     for admin_id in ADMIN_IDS:
         await bot.send_message(
             admin_id,
@@ -640,7 +626,7 @@ async def check_usdt(cb: types.CallbackQuery):
             f"📊 Сумма: {dep[4]:.4f} {dep[2].upper()}\n"
             f"📝 Memo: `{dep[3]}`\n"
             f"💰 К получению: {net:.2f} ₽\n\n"
-            f"Кошелёк: {WALLETS[dep[2]]}\n\n"
+            f"💰 Кошелёк для проверки: {WALLETS[dep[2]]}\n\n"
             f"Проверьте транзакцию и подтвердите.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -648,6 +634,7 @@ async def check_usdt(cb: types.CallbackQuery):
                  InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_usdt_{deposit_id}")]
             ])
         )
+    
     await cb.answer("✅ Запрос отправлен администратору. Ожидайте подтверждения.", show_alert=True)
 
 @dp.callback_query(F.data.startswith("confirm_usdt_"))
@@ -655,28 +642,35 @@ async def confirm_usdt(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS:
         await cb.answer("⛔ Нет доступа", show_alert=True)
         return
+    
     deposit_id = int(cb.data.split("_")[2])
     c.execute("SELECT id, user_id, crypto, memo, amount, status FROM deposits WHERE id = ?", (deposit_id,))
     dep = c.fetchone()
+    
     if not dep or dep[5] != 'pending':
         await cb.answer("❌ Заявка не найдена или уже обработана", show_alert=True)
         return
     
+    # Начисляем средства
     rate = get_exchange_rate(dep[2])
     gross = dep[4] * rate
     rub = gross - gross * get_commission() / 100
     update_balance(dep[1], rub)
     complete_deposit(deposit_id, dep[4], rub, dep[1], None)
     
+    # Уведомляем пользователя
     await bot.send_message(
         dep[1],
         f"✅ *Обмен {dep[2].upper()} подтверждён!*\n\n"
         f"💰 Зачислено: {rub:.2f} ₽\n"
         f"📊 Курс: {rate:.2f} ₽\n"
-        f"💸 Комиссия: {gross * get_commission() / 100:.2f} ₽",
+        f"💸 Комиссия: {gross * get_commission() / 100:.2f} ₽\n\n"
+        f"💵 Теперь вы можете вывести средства на карту через меню «Вывести».",
         parse_mode="Markdown"
     )
-    await cb.message.edit_text(f"✅ Заявка #{deposit_id} подтверждена, средства начислены.")
+    
+    # Обновляем сообщение в админке
+    await cb.message.edit_text(f"✅ Заявка #{deposit_id} подтверждена, средства начислены пользователю.")
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("reject_usdt_"))
@@ -684,22 +678,28 @@ async def reject_usdt(cb: types.CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS:
         await cb.answer("⛔ Нет доступа", show_alert=True)
         return
+    
     deposit_id = int(cb.data.split("_")[2])
     c.execute("SELECT id, user_id, crypto, memo, amount, status FROM deposits WHERE id = ?", (deposit_id,))
     dep = c.fetchone()
+    
     if not dep or dep[5] != 'pending':
         await cb.answer("❌ Заявка не найдена или уже обработана", show_alert=True)
         return
     
+    # Отклоняем заявку
     c.execute("UPDATE deposits SET status = 'rejected' WHERE id = ?", (deposit_id,))
     conn.commit()
     
+    # Уведомляем пользователя
     await bot.send_message(
         dep[1],
         f"❌ *Обмен {dep[2].upper()} отклонён администратором.*\n\n"
         f"Пожалуйста, свяжитесь с поддержкой: {SUPPORT_LINK}",
         parse_mode="Markdown"
     )
+    
+    # Обновляем сообщение в админке
     await cb.message.edit_text(f"❌ Заявка #{deposit_id} отклонена.")
     await cb.answer()
 
