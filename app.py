@@ -22,22 +22,22 @@ from aiogram.fsm.storage.memory import MemoryStorage
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(",") if id.strip()]
 WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")
-SUPPORT_LINK = os.environ.get("SUPPORT_LINK", "https://t.me/cryptohelp_01")  # Ссылка на поддержку
+SUPPORT_LINK = "https://t.me/cryptohelp_01"
 
-# Кошельки - читаем из переменных окружения
+# ============= ВАШИ КОШЕЛЬКИ (вставлены напрямую) =============
 WALLETS = {
-    'ton': os.environ.get("WALLET_TON", ""),
-    'usdt_ton': os.environ.get("WALLET_USDT_TON", os.environ.get("WALLET_USDT_TON", "")),
-    'usdt_trc20': os.environ.get("WALLET_USDT_TRC20", os.environ.get("WALLET_USDT_TRC20", "")),
+    'ton': "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs",
+    'usdt_ton': "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs",
+    'usdt_trc20': "TGt4Jpn5xk7CzkxeDynnkhwVyDDU124g6B"
 }
+# ================================================================
 
-# Выводим информацию о загруженных кошельках
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
-logger.info(f"Загружены кошельки:")
-logger.info(f"  TON: {WALLETS['ton'][:10]}...")
-logger.info(f"  USDT TON: {WALLETS['usdt_ton'][:10] if WALLETS['usdt_ton'] else 'НЕ ЗАДАН'}...")
-logger.info(f"  USDT TRC20: {WALLETS['usdt_trc20'][:10] if WALLETS['usdt_trc20'] else 'НЕ ЗАДАН'}...")
+print("\n" + "="*50)
+print("💰 КОШЕЛЬКИ ЗАГРУЖЕНЫ:")
+print(f"  TON: {WALLETS['ton'][:10]}...")
+print(f"  USDT TON: {WALLETS['usdt_ton'][:10]}...")
+print(f"  USDT TRC20: {WALLETS['usdt_trc20'][:10]}...")
+print("="*50 + "\n")
 
 if not BOT_TOKEN:
     logging.error("❌ BOT_TOKEN не задан!")
@@ -442,6 +442,7 @@ async def update_rates_loop():
 async def check_ton_tx(memo):
     address = WALLETS.get('ton')
     if not address:
+        logger.warning("TON кошелек не настроен!")
         return None
     try:
         url = "https://toncenter.com/api/v2/getTransactions"
@@ -464,7 +465,7 @@ async def check_ton_tx(memo):
 async def check_usdt_ton_tx(memo):
     address = WALLETS.get('usdt_ton')
     if not address:
-        logger.warning(f"USDT TON кошелек не настроен!")
+        logger.warning("USDT TON кошелек не настроен!")
         return None
     try:
         url = "https://toncenter.com/api/v2/getTransactions"
@@ -487,7 +488,7 @@ async def check_usdt_ton_tx(memo):
 async def check_trc20_tx(memo):
     address = WALLETS.get('usdt_trc20')
     if not address:
-        logger.warning(f"USDT TRC20 кошелек не настроен!")
+        logger.warning("USDT TRC20 кошелек не настроен!")
         return None
     try:
         url = "https://apilist.tronscan.org/api/transaction"
@@ -578,20 +579,16 @@ def main_kb():
         [InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw")],
         [InlineKeyboardButton(text="👥 Рефералы", callback_data="referrals")],
         [InlineKeyboardButton(text="📜 История", callback_data="history")],
-        [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_LINK)]  # Ссылка на поддержку
+        [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_LINK)]
     ])
 
 def exchange_kb():
-    # Проверяем какие кошельки настроены и показываем только доступные валюты
-    buttons = []
-    if WALLETS.get('ton'):
-        buttons.append([InlineKeyboardButton(text="💎 TON", callback_data="exch_ton")])
-    if WALLETS.get('usdt_ton'):
-        buttons.append([InlineKeyboardButton(text="💰 USDT (TON)", callback_data="exch_usdt_ton")])
-    if WALLETS.get('usdt_trc20'):
-        buttons.append([InlineKeyboardButton(text="💵 USDT (TRC20)", callback_data="exch_usdt_trc20")])
-    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 TON", callback_data="exch_ton")],
+        [InlineKeyboardButton(text="💰 USDT (TON)", callback_data="exch_usdt_ton")],
+        [InlineKeyboardButton(text="💵 USDT (TRC20)", callback_data="exch_usdt_trc20")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back")]
+    ])
 
 def back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]])
@@ -762,12 +759,6 @@ async def exchange_menu(cb: types.CallbackQuery, state: FSMContext):
     await state.clear()
     if get_user(cb.from_user.id) and get_user(cb.from_user.id)['is_banned']:
         await cb.answer("⛔ Аккаунт заблокирован", show_alert=True)
-        return
-    
-    # Проверяем есть ли настроенные кошельки
-    available_wallets = [k for k, v in WALLETS.items() if v]
-    if not available_wallets:
-        await edit_or_send(cb, "❌ *Ошибка*\n\nНи один кошелёк не настроен. Обратитесь к администратору.", back_kb())
         return
     
     await edit_or_send(cb, 
@@ -1240,7 +1231,7 @@ async def admin_ban_uid(m: types.Message, state: FSMContext):
         c.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (uid,))
         conn.commit()
     log_admin_action(m.from_user.id, "ban_user", target_user=uid)
-    await bot.send_message(uid, "🚫 *Ваш аккаунт заблокирован*\n\nСвяжитесь с администратором для выяснения причин.\n" + f"👉 @{SUPPORT_LINK.split('/')[-1]}", parse_mode="Markdown")
+    await bot.send_message(uid, "🚫 *Ваш аккаунт заблокирован*\n\nСвяжитесь с администратором для выяснения причин.\n" + f"👉 @cryptohelp_01", parse_mode="Markdown")
     await m.answer(f"✅ Пользователь {user['username']} (ID: {uid}) заблокирован.", reply_markup=admin_back_kb())
     await state.clear()
 
