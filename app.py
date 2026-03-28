@@ -21,6 +21,7 @@ ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(","
 WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")
 SUPPORT_LINK = "https://t.me/cryptohelp_01"
 
+# КОШЕЛЬКИ
 TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
 USDT_TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
 USDT_TRC20_WALLET = "TGt4Jpn5xk7CzkxeDynnkhwVyDDU124g6B"
@@ -99,6 +100,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT)''')
 
+# Значения по умолчанию
 c.execute("INSERT OR IGNORE INTO exchange_rates (crypto, rate_rub) VALUES (?, ?)", ('ton', 100))
 c.execute("INSERT OR IGNORE INTO exchange_rates (crypto, rate_rub) VALUES (?, ?)", ('usdt', 85))
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('commission', '7'))
@@ -464,13 +466,9 @@ async def edit_or_send(cb, text, markup=None):
         else:
             await cb.message.edit_caption(caption=text, parse_mode="Markdown", reply_markup=markup)
     except Exception as e:
-        logger.error(f"Error editing message: {e}")
-        # Если не удалось отредактировать, удаляем исходное и отправляем новое
-        try:
-            await cb.message.delete()
-        except:
-            pass
-        await cb.message.answer(text, parse_mode="Markdown", reply_markup=markup)
+        # Если не удалось отредактировать, отправляем новое сообщение
+        if "message is not modified" not in str(e):
+            await cb.message.answer(text, parse_mode="Markdown", reply_markup=markup)
     await cb.answer()
 
 # ============= ХЕНДЛЕРЫ =============
@@ -504,9 +502,13 @@ async def exchange_menu(cb: types.CallbackQuery, state: FSMContext):
         "💵 *USDT (TRC20)* - стейблкоин в сети TRON (мин. 1 USDT)",
         exchange_kb())
 
+# ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА КРИПТОВАЛЮТЫ
 @dp.callback_query(F.data.startswith("exch_"))
 async def exch_select(cb: types.CallbackQuery, state: FSMContext):
-    crypto = cb.data[5:]  # ton, usdt_ton, usdt_trc20
+    # Получаем всё после "exch_"
+    crypto = cb.data[5:]  # "ton", "usdt_ton", "usdt_trc20"
+    
+    # Проверяем, есть ли такой ключ в словаре кошельков
     if crypto not in WALLETS:
         await cb.answer(f"❌ Ошибка: валюта {crypto} не найдена", show_alert=True)
         return
@@ -566,7 +568,10 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
     address = WALLETS[crypto]
     deposit_id = add_deposit(user_id, crypto, memo, amount)
     
+    # USDT - ручное подтверждение
     if crypto in ('usdt_ton', 'usdt_trc20'):
+        # Отправляем новое сообщение с инструкцией, а старое удаляем
+        await cb.message.delete()
         text = (
             f"🔄 *Обмен {crypto.upper()}*\n\n"
             f"📤 *Отправьте на адрес*\n`{address}`\n\n"
@@ -582,11 +587,14 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="🔍 Проверить обмен", callback_data=f"check_usdt_{deposit_id}")],
             [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]
         ])
-        await edit_or_send(cb, text, kb)
+        await cb.message.answer(text, parse_mode="Markdown", reply_markup=kb)
         await state.clear()
+        await cb.answer()
         return
     
     # TON - автоматическая проверка
+    # Отправляем новое сообщение с инструкцией, а старое удаляем
+    await cb.message.delete()
     text = (
         f"🔄 *Обмен {crypto.upper()}*\n\n"
         f"📤 *Отправьте на адрес*\n`{address}`\n\n"
@@ -599,8 +607,9 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
         f"⏱ Обычно зачисление занимает 1-5 минут."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]])
-    await edit_or_send(cb, text, kb)
+    await cb.message.answer(text, parse_mode="Markdown", reply_markup=kb)
     await state.clear()
+    await cb.answer()
 
 # ============= USDT ПРОВЕРКА АДМИНОМ =============
 @dp.callback_query(F.data.startswith("check_usdt_"))
