@@ -18,6 +18,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
+# -------------------- ЗАГРУЗКА ПЕРЕМЕННЫХ --------------------
+# Если используете .env файл
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # -------------------- КОНФИГ --------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CRYPTO_PAY_TOKEN = os.environ.get("CRYPTO_PAY_TOKEN")
@@ -25,11 +33,17 @@ ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(","
 WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")
 SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "cryptohelp_01")
 
-if not BOT_TOKEN or not CRYPTO_PAY_TOKEN:
-    logging.error("❌ BOT_TOKEN и CRYPTO_PAY_TOKEN обязательны!")
+# Проверка обязательных переменных
+if not BOT_TOKEN:
+    logging.error("❌ BOT_TOKEN не задан!")
     exit(1)
+if not CRYPTO_PAY_TOKEN:
+    logging.error("❌ CRYPTO_PAY_TOKEN не задан!")
+    exit(1)
+if not ADMIN_IDS:
+    logging.warning("⚠️ ADMIN_IDS не задан! Админ-панель будет недоступна.")
 
-# Минимальные суммы обмена (в единицах криптовалюты)
+# Минимальные суммы обмена
 MIN_EXCHANGE_AMOUNTS = {
     'TON': 1.0,
     'USDT': 1.0
@@ -46,7 +60,10 @@ MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('bot.log'), logging.StreamHandler()]
+    handlers=[
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -78,14 +95,14 @@ def init_database():
                      ref_bonus REAL DEFAULT 0,
                      is_banned INTEGER DEFAULT 0,
                      created_at INTEGER)''')
-        # Депозиты (теперь храним invoice_id)
+        # Депозиты (через Crypto Pay)
         c.execute('''CREATE TABLE IF NOT EXISTS deposits (
                      id INTEGER PRIMARY KEY AUTOINCREMENT,
                      user_id INTEGER,
-                     asset TEXT,               -- TON, USDT
+                     asset TEXT,
                      amount REAL,
                      invoice_id INTEGER,
-                     status TEXT,              -- pending, completed
+                     status TEXT,
                      created_at INTEGER,
                      completed_at INTEGER)''')
         # Выводы
@@ -123,6 +140,7 @@ def init_database():
                      target_user INTEGER,
                      details TEXT,
                      created_at INTEGER)''')
+
         # Индексы
         for idx in [
             "CREATE INDEX IF NOT EXISTS idx_users_user_id ON users (user_id)",
@@ -137,12 +155,16 @@ def init_database():
                 pass
 
         # Настройки по умолчанию
-        defaults = [("commission", "7"), ("referral_percent", "1"),
-                    ("min_withdrawal", str(MIN_WITHDRAWAL)), ("max_withdrawal", str(MAX_WITHDRAWAL))]
+        defaults = [
+            ("commission", "7"),
+            ("referral_percent", "1"),
+            ("min_withdrawal", str(MIN_WITHDRAWAL)),
+            ("max_withdrawal", str(MAX_WITHDRAWAL)),
+        ]
         for k, v in defaults:
             c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
-        # Курсы по умолчанию
+        # Курсы по умолчанию (если API не ответит)
         default_rates = [('TON', 500.0), ('USDT', 85.0)]
         for asset, rate in default_rates:
             c.execute("INSERT OR IGNORE INTO exchange_rates (asset, rate_rub, updated_at) VALUES (?, ?, ?)",
@@ -342,7 +364,6 @@ def backup_database() -> bool:
 CRYPTO_PAY_API = "https://pay.crypt.bot/api"
 
 async def crypto_pay_request(method: str, params: dict = None) -> Optional[dict]:
-    """Выполнить запрос к Crypto Pay API."""
     headers = {"Crypto-Pay-API-Token": CRYPTO_PAY_TOKEN}
     url = f"{CRYPTO_PAY_API}/{method}"
     async with aiohttp.ClientSession() as session:
@@ -363,7 +384,7 @@ async def crypto_pay_request(method: str, params: dict = None) -> Optional[dict]
             return None
 
 async def get_exchange_rates() -> Optional[Dict[str, float]]:
-    """Получить курсы обмена RUB -> TON, USDT."""
+    """Получить курсы RUB -> TON, USDT из Crypto Pay"""
     result = await crypto_pay_request("getExchangeRates")
     if not result:
         return None
@@ -374,18 +395,16 @@ async def get_exchange_rates() -> Optional[Dict[str, float]]:
     return rates
 
 async def create_invoice(asset: str, amount: float, description: str) -> Optional[dict]:
-    """Создать инвойс в Crypto Pay."""
     payload = {
-        "asset": asset,          # TON или USDT
+        "asset": asset,
         "amount": str(amount),
         "description": description,
         "paid_btn_name": "callback",
-        "paid_btn_url": "https://t.me/your_bot"
+        "paid_btn_url": "https://t.me/your_bot"  # можно заменить на ссылку на вашего бота
     }
     return await crypto_pay_request("createInvoice", payload)
 
 async def check_invoice(invoice_id: int) -> Optional[dict]:
-    """Проверить статус инвойса."""
     result = await crypto_pay_request("getInvoices", {"invoice_ids": invoice_id})
     if result and len(result) > 0:
         return result[0]
@@ -414,7 +433,6 @@ def escape_markdown(text: str) -> str:
 
 # -------------------- ФОНОВЫЕ ЗАДАЧИ --------------------
 async def update_rates_periodically():
-    """Обновление курсов RUB -> TON/USDT через Crypto Pay API"""
     while True:
         rates = await get_exchange_rates()
         if rates:
@@ -426,7 +444,6 @@ async def update_rates_periodically():
         await asyncio.sleep(RATE_UPDATE_INTERVAL)
 
 async def check_pending_invoices():
-    """Проверка неоплаченных инвойсов и зачисление при успешной оплате."""
     while True:
         try:
             with get_db() as (conn, c):
@@ -435,7 +452,6 @@ async def check_pending_invoices():
             for dep in pending:
                 invoice = await check_invoice(dep['invoice_id'])
                 if invoice and invoice['status'] == 'paid':
-                    # Оплата получена
                     rate = get_exchange_rate(dep['asset'])
                     gross_rub = dep['amount'] * rate
                     commission = get_commission()
@@ -649,7 +665,7 @@ async def show_balance(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Заблокирован", show_alert=True)
         return
     balance = get_balance(callback.from_user.id)
-    await edit_or_send_message(callback, f"💰 *Баланс*\n\n{balance:.2f} ₽", back_to_main_kb())
+    await edit_or_send_message(callback, f"💰 *Ваш баланс*\n\n{balance:.2f} ₽", back_to_main_kb())
 
 @dp.callback_query(F.data == "menu_exchange")
 async def exchange_menu(callback: types.CallbackQuery, state: FSMContext):
@@ -725,17 +741,14 @@ async def exchange_confirm(callback: types.CallbackQuery, state: FSMContext):
     net = data['net']
     user_id = callback.from_user.id
 
-    # Создаём инвойс в Crypto Pay
     description = f"Обмен {amount} {asset} на рубли"
     invoice = await create_invoice(asset, amount, description)
     if not invoice:
         await callback.answer("❌ Ошибка создания счёта, попробуйте позже", show_alert=True)
         return
 
-    # Сохраняем в БД
     add_deposit(user_id, asset, amount, invoice['invoice_id'])
 
-    # Отправляем ссылку на оплату
     pay_url = invoice.get('pay_url')
     text = (
         f"🔄 *Обмен {asset}*\n\n"
