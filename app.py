@@ -22,14 +22,22 @@ from aiogram.fsm.storage.memory import MemoryStorage
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(",") if id.strip()]
 WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")
-SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "cryptohelp_01")
+SUPPORT_LINK = os.environ.get("SUPPORT_LINK", "https://t.me/cryptohelp_01")  # Ссылка на поддержку
 
-# Кошельки
+# Кошельки - читаем из переменных окружения
 WALLETS = {
     'ton': os.environ.get("WALLET_TON", ""),
-    'usdt_ton': os.environ.get("WALLET_USDT_TON", ""),
-    'usdt_trc20': os.environ.get("WALLET_USDT_TRC20", ""),
+    'usdt_ton': os.environ.get("WALLET_USDT_TON", os.environ.get("WALLET_USDT_TON", "")),
+    'usdt_trc20': os.environ.get("WALLET_USDT_TRC20", os.environ.get("WALLET_USDT_TRC20", "")),
 }
+
+# Выводим информацию о загруженных кошельках
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+logger.info(f"Загружены кошельки:")
+logger.info(f"  TON: {WALLETS['ton'][:10]}...")
+logger.info(f"  USDT TON: {WALLETS['usdt_ton'][:10] if WALLETS['usdt_ton'] else 'НЕ ЗАДАН'}...")
+logger.info(f"  USDT TRC20: {WALLETS['usdt_trc20'][:10] if WALLETS['usdt_trc20'] else 'НЕ ЗАДАН'}...")
 
 if not BOT_TOKEN:
     logging.error("❌ BOT_TOKEN не задан!")
@@ -456,6 +464,7 @@ async def check_ton_tx(memo):
 async def check_usdt_ton_tx(memo):
     address = WALLETS.get('usdt_ton')
     if not address:
+        logger.warning(f"USDT TON кошелек не настроен!")
         return None
     try:
         url = "https://toncenter.com/api/v2/getTransactions"
@@ -478,6 +487,7 @@ async def check_usdt_ton_tx(memo):
 async def check_trc20_tx(memo):
     address = WALLETS.get('usdt_trc20')
     if not address:
+        logger.warning(f"USDT TRC20 кошелек не настроен!")
         return None
     try:
         url = "https://apilist.tronscan.org/api/transaction"
@@ -568,16 +578,20 @@ def main_kb():
         [InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw")],
         [InlineKeyboardButton(text="👥 Рефералы", callback_data="referrals")],
         [InlineKeyboardButton(text="📜 История", callback_data="history")],
-        [InlineKeyboardButton(text="🆘 Поддержка", callback_data="support")]
+        [InlineKeyboardButton(text="🆘 Поддержка", url=SUPPORT_LINK)]  # Ссылка на поддержку
     ])
 
 def exchange_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 TON", callback_data="exch_ton")],
-        [InlineKeyboardButton(text="💰 USDT (TON)", callback_data="exch_usdt_ton")],
-        [InlineKeyboardButton(text="💵 USDT (TRC20)", callback_data="exch_usdt_trc20")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back")]
-    ])
+    # Проверяем какие кошельки настроены и показываем только доступные валюты
+    buttons = []
+    if WALLETS.get('ton'):
+        buttons.append([InlineKeyboardButton(text="💎 TON", callback_data="exch_ton")])
+    if WALLETS.get('usdt_ton'):
+        buttons.append([InlineKeyboardButton(text="💰 USDT (TON)", callback_data="exch_usdt_ton")])
+    if WALLETS.get('usdt_trc20'):
+        buttons.append([InlineKeyboardButton(text="💵 USDT (TRC20)", callback_data="exch_usdt_trc20")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]])
@@ -749,6 +763,13 @@ async def exchange_menu(cb: types.CallbackQuery, state: FSMContext):
     if get_user(cb.from_user.id) and get_user(cb.from_user.id)['is_banned']:
         await cb.answer("⛔ Аккаунт заблокирован", show_alert=True)
         return
+    
+    # Проверяем есть ли настроенные кошельки
+    available_wallets = [k for k, v in WALLETS.items() if v]
+    if not available_wallets:
+        await edit_or_send(cb, "❌ *Ошибка*\n\nНи один кошелёк не настроен. Обратитесь к администратору.", back_kb())
+        return
+    
     await edit_or_send(cb, 
         "🔄 *Обмен криптовалюты на рубли*\n\n"
         "Выберите криптовалюту, которую хотите обменять\n\n"
@@ -764,9 +785,12 @@ async def exch_select(cb: types.CallbackQuery, state: FSMContext):
         await cb.answer("⛔ Аккаунт заблокирован", show_alert=True)
         return
     crypto = cb.data.split("_")[1]
+    
+    # Проверяем наличие кошелька
     if crypto not in WALLETS or not WALLETS[crypto]:
-        await cb.answer("❌ Кошелёк для этой валюты не настроен", show_alert=True)
+        await cb.answer(f"❌ Кошелёк для {crypto.upper()} не настроен. Обратитесь к администратору.", show_alert=True)
         return
+    
     await state.update_data(crypto=crypto)
     rate = get_exchange_rate(crypto)
     min_amt = MIN_EXCHANGE_AMOUNTS[crypto]
@@ -957,11 +981,6 @@ async def history_cb(cb: types.CallbackQuery, state: FSMContext):
     if not dep and not wd:
         text += "📭 Операций пока нет."
     await edit_or_send(cb, text, back_kb())
-
-@dp.callback_query(F.data == "support")
-async def support_cb(cb: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    await edit_or_send(cb, f"🆘 *Поддержка*\n\nЕсли у вас возникли вопросы или проблемы, свяжитесь с нашим специалистом\n\n👉 @{SUPPORT_USERNAME}", back_kb())
 
 # -------------------- АДМИНКА --------------------
 @dp.message(Command("admin"))
@@ -1221,7 +1240,7 @@ async def admin_ban_uid(m: types.Message, state: FSMContext):
         c.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (uid,))
         conn.commit()
     log_admin_action(m.from_user.id, "ban_user", target_user=uid)
-    await bot.send_message(uid, "🚫 *Ваш аккаунт заблокирован*\n\nСвяжитесь с администратором для выяснения причин.\n" + f"👉 @{SUPPORT_USERNAME}", parse_mode="Markdown")
+    await bot.send_message(uid, "🚫 *Ваш аккаунт заблокирован*\n\nСвяжитесь с администратором для выяснения причин.\n" + f"👉 @{SUPPORT_LINK.split('/')[-1]}", parse_mode="Markdown")
     await m.answer(f"✅ Пользователь {user['username']} (ID: {uid}) заблокирован.", reply_markup=admin_back_kb())
     await state.clear()
 
