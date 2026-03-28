@@ -7,7 +7,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 from collections import defaultdict
-from flask import Flask, jsonify
+from flask import Flask
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -21,7 +21,6 @@ ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(","
 WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")
 SUPPORT_LINK = "https://t.me/cryptohelp_01"
 
-# КОШЕЛЬКИ
 TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
 USDT_TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
 USDT_TRC20_WALLET = "TGt4Jpn5xk7CzkxeDynnkhwVyDDU124g6B"
@@ -100,7 +99,6 @@ c.execute('''CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT)''')
 
-# Значения по умолчанию
 c.execute("INSERT OR IGNORE INTO exchange_rates (crypto, rate_rub) VALUES (?, ?)", ('ton', 100))
 c.execute("INSERT OR IGNORE INTO exchange_rates (crypto, rate_rub) VALUES (?, ?)", ('usdt', 85))
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('commission', '7'))
@@ -459,16 +457,20 @@ async def welcome(target, user_id, username, ref_by=None):
             await target.message.answer(text, parse_mode="Markdown", reply_markup=main_kb())
 
 async def edit_or_send(cb, text, markup=None):
-    """Правильное редактирование сообщения"""
+    """Правильное редактирование сообщения с удалением при ошибке"""
     try:
         if cb.message.text:
             await cb.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
         else:
             await cb.message.edit_caption(caption=text, parse_mode="Markdown", reply_markup=markup)
     except Exception as e:
-        # Если не удалось отредактировать (например, сообщение не изменилось), отправляем новое
-        if "message is not modified" not in str(e):
-            await cb.message.answer(text, parse_mode="Markdown", reply_markup=markup)
+        logger.error(f"Error editing message: {e}")
+        # Если не удалось отредактировать, удаляем исходное и отправляем новое
+        try:
+            await cb.message.delete()
+        except:
+            pass
+        await cb.message.answer(text, parse_mode="Markdown", reply_markup=markup)
     await cb.answer()
 
 # ============= ХЕНДЛЕРЫ =============
@@ -502,13 +504,9 @@ async def exchange_menu(cb: types.CallbackQuery, state: FSMContext):
         "💵 *USDT (TRC20)* - стейблкоин в сети TRON (мин. 1 USDT)",
         exchange_kb())
 
-# ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ВЫБОРА КРИПТОВАЛЮТЫ
 @dp.callback_query(F.data.startswith("exch_"))
 async def exch_select(cb: types.CallbackQuery, state: FSMContext):
-    # Получаем всё после "exch_"
-    crypto = cb.data[5:]  # "ton", "usdt_ton", "usdt_trc20"
-    
-    # Проверяем, есть ли такой ключ в словаре кошельков
+    crypto = cb.data[5:]  # ton, usdt_ton, usdt_trc20
     if crypto not in WALLETS:
         await cb.answer(f"❌ Ошибка: валюта {crypto} не найдена", show_alert=True)
         return
@@ -568,7 +566,6 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
     address = WALLETS[crypto]
     deposit_id = add_deposit(user_id, crypto, memo, amount)
     
-    # USDT - ручное подтверждение
     if crypto in ('usdt_ton', 'usdt_trc20'):
         text = (
             f"🔄 *Обмен {crypto.upper()}*\n\n"
@@ -799,7 +796,7 @@ async def history_cb(cb: types.CallbackQuery, state: FSMContext):
         text += "📭 Операций пока нет."
     await edit_or_send(cb, text, back_kb())
 
-# ============= АДМИНКА (полная) =============
+# ============= АДМИНКА =============
 @dp.message(Command("admin"))
 async def admin_cmd(m: types.Message, state: FSMContext):
     if m.from_user.id not in ADMIN_IDS:
@@ -815,7 +812,6 @@ async def admin_back(cb: types.CallbackQuery, state: FSMContext):
 async def admin_exit(cb: types.CallbackQuery, state: FSMContext):
     await back_cb(cb, state)
 
-# Заявки на вывод
 @dp.callback_query(F.data == "admin_requests")
 async def admin_requests(cb: types.CallbackQuery):
     c.execute("SELECT id, user_id, amount, details, status FROM withdrawals WHERE status = 'pending' ORDER BY created_at DESC")
@@ -875,7 +871,6 @@ async def reject_comment(m: types.Message, state: FSMContext):
         await m.answer("❌ Заявка не найдена.", reply_markup=admin_kb())
     await state.clear()
 
-# Статистика
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(cb: types.CallbackQuery):
     users, deposits, withdrawals = get_statistics()
@@ -893,7 +888,6 @@ async def admin_stats(cb: types.CallbackQuery):
         f"🎁 Реферальных бонусов: {ref_bonus:.2f} ₽",
         admin_kb())
 
-# Курсы
 @dp.callback_query(F.data == "admin_rates")
 async def admin_rates_menu(cb: types.CallbackQuery):
     await edit_or_send(cb, "🔧 *Управление курсами*\n\nВыберите валюту:", InlineKeyboardMarkup(inline_keyboard=[
@@ -926,7 +920,6 @@ async def admin_rate_set(m: types.Message, state: FSMContext):
     await m.answer(f"✅ Курс {data['crypto'].upper()} = {rate:.2f} ₽", reply_markup=admin_kb())
     await state.clear()
 
-# Кошельки
 @dp.callback_query(F.data == "admin_wallets")
 async def admin_wallets_menu(cb: types.CallbackQuery):
     text = "💰 *Управление кошельками*\n\n"
@@ -941,7 +934,7 @@ async def admin_wallets_menu(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("wallet_"))
 async def admin_wallet_select(cb: types.CallbackQuery, state: FSMContext):
-    crypto = cb.data.split("_")[1]  # "ton", "usdt_ton", "usdt_trc20"
+    crypto = cb.data.split("_")[1]
     await state.update_data(crypto=crypto)
     current = WALLETS[crypto]
     await edit_or_send(cb, f"🔧 *Изменение кошелька {crypto.upper()}*\n\nТекущий кошелёк:\n`{current}`\n\nВведите новый адрес:", admin_kb())
@@ -958,7 +951,6 @@ async def admin_wallet_set(m: types.Message, state: FSMContext):
     await m.answer(f"✅ Кошелёк {data['crypto'].upper()} обновлён", reply_markup=admin_kb())
     await state.clear()
 
-# Комиссия
 @dp.callback_query(F.data == "admin_commission")
 async def admin_commission_menu(cb: types.CallbackQuery, state: FSMContext):
     current = get_commission()
@@ -978,7 +970,6 @@ async def admin_commission_set(m: types.Message, state: FSMContext):
         await m.answer("❌ Введите число")
     await state.clear()
 
-# Реферальный процент
 @dp.callback_query(F.data == "admin_referral")
 async def admin_referral_menu(cb: types.CallbackQuery, state: FSMContext):
     current = get_referral_percent()
@@ -998,7 +989,6 @@ async def admin_referral_set(m: types.Message, state: FSMContext):
         await m.answer("❌ Введите число")
     await state.clear()
 
-# Изменение баланса
 @dp.callback_query(F.data == "admin_balance")
 async def admin_balance_start(cb: types.CallbackQuery, state: FSMContext):
     await edit_or_send(cb, "👤 *Ручное изменение баланса*\n\nВведите Telegram ID пользователя:", admin_kb())
@@ -1033,7 +1023,6 @@ async def admin_balance_amount(m: types.Message, state: FSMContext):
     await m.answer(f"✅ Баланс пользователя {data['username']} изменён на {amt:+.2f} ₽\n💰 Новый баланс: {new_bal:.2f} ₽", reply_markup=admin_kb())
     await state.clear()
 
-# Блокировка
 @dp.callback_query(F.data == "admin_ban")
 async def admin_ban_start(cb: types.CallbackQuery, state: FSMContext):
     await edit_or_send(cb, "🚫 *Блокировка пользователя*\n\nВведите Telegram ID пользователя для блокировки:", admin_kb())
@@ -1056,7 +1045,6 @@ async def admin_ban_uid(m: types.Message, state: FSMContext):
     await m.answer(f"✅ Пользователь {user[2]} (ID: {uid}) заблокирован", reply_markup=admin_kb())
     await state.clear()
 
-# Рассылка
 @dp.callback_query(F.data == "admin_mailing")
 async def admin_mailing(cb: types.CallbackQuery, state: FSMContext):
     await edit_or_send(cb, "📢 *Рассылка*\n\nВведите текст сообщения для рассылки:", admin_kb())
