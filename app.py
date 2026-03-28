@@ -24,19 +24,24 @@ ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(","
 WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")
 SUPPORT_LINK = "https://t.me/cryptohelp_01"
 
-# ============= ВАШИ КОШЕЛЬКИ (вставлены напрямую) =============
+# ============= ВАШИ КОШЕЛЬКИ (ВСТАВЛЕНЫ НАПРЯМУЮ) =============
+TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
+USDT_TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
+USDT_TRC20_WALLET = "TGt4Jpn5xk7CzkxeDynnkhwVyDDU124g6B"
+
+# Создаем словарь кошельков (для удобства)
 WALLETS = {
-    'ton': "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs",
-    'usdt_ton': "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs",
-    'usdt_trc20': "TGt4Jpn5xk7CzkxeDynnkhwVyDDU124g6B"
+    'ton': TON_WALLET,
+    'usdt_ton': USDT_TON_WALLET,
+    'usdt_trc20': USDT_TRC20_WALLET
 }
 # ================================================================
 
 print("\n" + "="*50)
 print("💰 КОШЕЛЬКИ ЗАГРУЖЕНЫ:")
-print(f"  TON: {WALLETS['ton'][:10]}...")
-print(f"  USDT TON: {WALLETS['usdt_ton'][:10]}...")
-print(f"  USDT TRC20: {WALLETS['usdt_trc20'][:10]}...")
+print(f"  TON: {TON_WALLET[:15]}...")
+print(f"  USDT TON: {USDT_TON_WALLET[:15]}...")
+print(f"  USDT TRC20: {USDT_TRC20_WALLET[:15]}...")
 print("="*50 + "\n")
 
 if not BOT_TOKEN:
@@ -440,10 +445,7 @@ async def update_rates_loop():
 
 # -------------------- ПРОВЕРКА ТРАНЗАКЦИЙ --------------------
 async def check_ton_tx(memo):
-    address = WALLETS.get('ton')
-    if not address:
-        logger.warning("TON кошелек не настроен!")
-        return None
+    address = WALLETS['ton']
     try:
         url = "https://toncenter.com/api/v2/getTransactions"
         params = {'address': address, 'limit': 50}
@@ -463,10 +465,7 @@ async def check_ton_tx(memo):
     return None
 
 async def check_usdt_ton_tx(memo):
-    address = WALLETS.get('usdt_ton')
-    if not address:
-        logger.warning("USDT TON кошелек не настроен!")
-        return None
+    address = WALLETS['usdt_ton']
     try:
         url = "https://toncenter.com/api/v2/getTransactions"
         params = {'address': address, 'limit': 50}
@@ -486,10 +485,7 @@ async def check_usdt_ton_tx(memo):
     return None
 
 async def check_trc20_tx(memo):
-    address = WALLETS.get('usdt_trc20')
-    if not address:
-        logger.warning("USDT TRC20 кошелек не настроен!")
-        return None
+    address = WALLETS['usdt_trc20']
     try:
         url = "https://apilist.tronscan.org/api/transaction"
         params = {'address': address, 'limit': 50, 'sort': '-timestamp'}
@@ -775,13 +771,14 @@ async def exch_select(cb: types.CallbackQuery, state: FSMContext):
     if get_user(cb.from_user.id) and get_user(cb.from_user.id)['is_banned']:
         await cb.answer("⛔ Аккаунт заблокирован", show_alert=True)
         return
-    crypto = cb.data.split("_")[1]
+    crypto = cb.data.split("_")[1]  # ton, usdt_ton или usdt_trc20
     
-    # Проверяем наличие кошелька
-    if crypto not in WALLETS or not WALLETS[crypto]:
-        await cb.answer(f"❌ Кошелёк для {crypto.upper()} не настроен. Обратитесь к администратору.", show_alert=True)
+    # Просто проверяем что кошелек существует в словаре (он есть всегда)
+    if crypto not in WALLETS:
+        await cb.answer(f"❌ Ошибка: валюта {crypto} не найдена", show_alert=True)
         return
     
+    # Убираем проверку на пустой кошелек, потому что кошельки уже вставлены
     await state.update_data(crypto=crypto)
     rate = get_exchange_rate(crypto)
     min_amt = MIN_EXCHANGE_AMOUNTS[crypto]
@@ -839,7 +836,7 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
     net = data['net']
     user_id = cb.from_user.id
     memo = f"dep_{user_id}_{int(time.time())}"
-    address = WALLETS[crypto]
+    address = WALLETS[crypto]  # Берем адрес из словаря (он точно есть)
     add_deposit(user_id, crypto, memo, amount)
     
     text = (
@@ -973,7 +970,7 @@ async def history_cb(cb: types.CallbackQuery, state: FSMContext):
         text += "📭 Операций пока нет."
     await edit_or_send(cb, text, back_kb())
 
-# -------------------- АДМИНКА --------------------
+# -------------------- АДМИНКА (сокращена, но полная) --------------------
 @dp.message(Command("admin"))
 async def admin_cmd(m: types.Message, state: FSMContext):
     if m.from_user.id not in ADMIN_IDS:
