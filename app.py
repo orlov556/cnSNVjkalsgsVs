@@ -44,10 +44,9 @@ for key, value in WALLETS.items():
     if not value or value in ("EQD...", "T...", ""):
         logging.warning(f"⚠️ Кошелёк для {key} не задан! Укажите WALLET_{key.upper()}")
 
-# Лимиты и настройки
+# Лимиты и настройки (первоначальные значения)
 MIN_WITHDRAWAL = float(os.environ.get("MIN_WITHDRAWAL", "100"))
 MAX_WITHDRAWAL = float(os.environ.get("MAX_WITHDRAWAL", "100000"))
-MIN_EXCHANGE = float(os.environ.get("MIN_EXCHANGE", "1"))
 RATE_UPDATE_INTERVAL = int(os.environ.get("RATE_UPDATE_INTERVAL", "30"))
 DEPOSIT_CHECK_INTERVAL = int(os.environ.get("DEPOSIT_CHECK_INTERVAL", "60"))
 BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", "86400"))
@@ -164,13 +163,12 @@ def init_database():
             except Exception as e:
                 logger.warning(f"Ошибка создания индекса: {e}")
         
-        # Настройки по умолчанию
+        # Настройки по умолчанию (7% комиссия, 1% реферальная)
         defaults = [
-            ("commission", "5"),
-            ("referral_percent", "5"),
+            ("commission", "7"),
+            ("referral_percent", "1"),
             ("min_withdrawal", str(MIN_WITHDRAWAL)),
             ("max_withdrawal", str(MAX_WITHDRAWAL)),
-            ("min_exchange", str(MIN_EXCHANGE))
         ]
         
         for key, value in defaults:
@@ -206,13 +204,13 @@ def set_setting(key: str, value: str) -> None:
         conn.commit()
 
 def get_commission() -> float:
-    return float(get_setting("commission", "5"))
+    return float(get_setting("commission", "7"))
 
 def set_commission(percent: float) -> None:
     set_setting("commission", str(percent))
 
 def get_referral_percent() -> float:
-    return float(get_setting("referral_percent", "5"))
+    return float(get_setting("referral_percent", "1"))
 
 def set_referral_percent(percent: float) -> None:
     set_setting("referral_percent", str(percent))
@@ -419,81 +417,100 @@ def escape_markdown(text: str) -> str:
     
     return ''.join(result)
 
-# -------------------- ПОЛУЧЕНИЕ КУРСОВ (МНОЖЕСТВО API) --------------------
-async def fetch_usdt_rub_multiple() -> Optional[float]:
-    """Получение курса USDT/RUB из нескольких источников"""
-    sources = [
-        {
-            "name": "Bybit",
-            "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=USDTUSD",
-            "parser": lambda data: float(data['result']['list'][0]['lastPrice']) if data.get('result') and data['result']['list'] else None
-        },
-        {
-            "name": "KuCoin",
-            "url": "https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=USDT-USDT",
-            "parser": lambda data: float(data['data']['price']) if data.get('data') else None
-        },
-        {
-            "name": "Gate.io",
-            "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=USDT_USDT",
-            "parser": lambda data: float(data[0]['last']) if data and len(data) > 0 else None
+# -------------------- ПОЛУЧЕНИЕ КУРСОВ ИЗ РАЗНЫХ ИСТОЧНИКОВ --------------------
+async def fetch_usdt_rub_crypto_bot() -> Optional[float]:
+    """Получение курса USDT/RUB из Crypto Bot API"""
+    try:
+        # Используем API крипто бота
+        url = "https://api.crypt.bot/v1/getExchangeRate"
+        params = {
+            "from": "USDT",
+            "to": "RUB"
         }
-    ]
-    
-    for source in sources:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(source["url"], timeout=10, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        usdt_usd = source["parser"](data)
-                        if usdt_usd and usdt_usd > 0:
-                            logger.info(f"USDT/USD from {source['name']}: {usdt_usd}")
-                            usd_rub = await fetch_usd_rub()
-                            if usd_rub:
-                                return usdt_usd * usd_rub
-        except Exception as e:
-            logger.warning(f"Ошибка получения USDT/USD из {source['name']}: {e}")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get('ok') and data.get('result'):
+                        rate = float(data['result']['rate'])
+                        logger.info(f"USDT/RUB from Crypto Bot: {rate:.2f} ₽")
+                        return rate
+    except Exception as e:
+        logger.warning(f"Ошибка получения USDT/RUB из Crypto Bot: {e}")
     
     return None
 
-async def fetch_usd_rub() -> Optional[float]:
-    """Получение курса USD/RUB из различных источников"""
-    sources = [
-        {
-            "name": "Central Bank of Russia",
-            "url": "https://www.cbr-xml-daily.ru/daily_json.js",
-            "parser": lambda data: float(data['Valute']['USD']['Value'])
-        },
-        {
-            "name": "Currency API",
-            "url": "https://api.exchangerate-api.com/v4/latest/USD",
-            "parser": lambda data: float(data['rates']['RUB'])
-        },
-        {
-            "name": "Free Currency API",
-            "url": "https://api.freecurrencyapi.com/v1/latest?apikey=fca_live_6YpCQiHFz9DwHd0EBIz5CzrUdUcvNszjUBSWPLZP&base_currency=USD&currencies=RUB",
-            "parser": lambda data: float(data['data']['RUB']) if data.get('data') else None
+async def fetch_usdt_rub_binance() -> Optional[float]:
+    """Получение курса USDT/RUB через Binance P2P"""
+    try:
+        # Binance P2P API
+        url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0"
         }
-    ]
+        payload = {
+            "asset": "USDT",
+            "fiat": "RUB",
+            "tradeType": "BUY",
+            "page": 1,
+            "rows": 1
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get('data') and len(data['data']) > 0:
+                        rate = float(data['data'][0]['adv']['price'])
+                        logger.info(f"USDT/RUB from Binance P2P: {rate:.2f} ₽")
+                        return rate
+    except Exception as e:
+        logger.warning(f"Ошибка получения USDT/RUB из Binance P2P: {e}")
     
-    for source in sources:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(source["url"], timeout=10, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        rate = source["parser"](data)
-                        if rate and rate > 0:
-                            logger.info(f"USD/RUB from {source['name']}: {rate}")
-                            return rate
-        except Exception as e:
-            logger.warning(f"Ошибка получения USD/RUB из {source['name']}: {e}")
+    return None
+
+async def fetch_usdt_rub_coingecko() -> Optional[float]:
+    """Получение курса USDT/RUB через CoinGecko"""
+    try:
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=rub"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    rate = float(data['tether']['rub'])
+                    logger.info(f"USDT/RUB from CoinGecko: {rate:.2f} ₽")
+                    return rate
+    except Exception as e:
+        logger.warning(f"Ошибка получения USDT/RUB из CoinGecko: {e}")
+    
+    return None
+
+async def fetch_usdt_rub_cbr() -> Optional[float]:
+    """Получение курса USD/RUB из ЦБ РФ, затем конвертация USDT/USD"""
+    try:
+        # Получаем курс USD/RUB из ЦБ РФ
+        url = "https://www.cbr-xml-daily.ru/daily_json.js"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    usd_rub = float(data['Valute']['USD']['Value'])
+                    
+                    # USDT обычно равен 1 USD
+                    rate = usd_rub
+                    logger.info(f"USDT/RUB from CBR (USD/RUB): {rate:.2f} ₽")
+                    return rate
+    except Exception as e:
+        logger.warning(f"Ошибка получения курса из ЦБ РФ: {e}")
     
     return None
 
 async def fetch_ton_usdt_multiple() -> Optional[float]:
-    """Получение курса TON/USDT из нескольких источников"""
+    """Получение курса TON/USDT из разных источников"""
     sources = [
         {
             "name": "Bybit",
@@ -532,92 +549,51 @@ async def fetch_ton_usdt_multiple() -> Optional[float]:
     
     return None
 
-async def fetch_usdt_rub_direct() -> Optional[float]:
-    """Прямое получение USDT/RUB из обменников"""
-    sources = [
-        {
-            "name": "Coingecko",
-            "url": "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=rub",
-            "parser": lambda data: float(data['tether']['rub']) if data.get('tether') else None
-        }
-    ]
-    
-    for source in sources:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(source["url"], timeout=10, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        rate = source["parser"](data)
-                        if rate and rate > 0:
-                            logger.info(f"USDT/RUB direct from {source['name']}: {rate}")
-                            return rate
-        except Exception as e:
-            logger.warning(f"Ошибка получения USDT/RUB из {source['name']}: {e}")
+async def fetch_ton_rub_direct() -> Optional[float]:
+    """Прямое получение курса TON/RUB"""
+    try:
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=rub"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    rate = float(data['the-open-network']['rub'])
+                    logger.info(f"TON/RUB from CoinGecko: {rate:.2f} ₽")
+                    return rate
+    except Exception as e:
+        logger.warning(f"Ошибка получения TON/RUB: {e}")
     
     return None
 
-async def fetch_usdt_usd_multiple() -> Optional[float]:
-    """Получение курса USDT/USD"""
-    sources = [
-        {
-            "name": "Bybit",
-            "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=USDTUSD",
-            "parser": lambda data: float(data['result']['list'][0]['lastPrice']) if data.get('result') and data['result']['list'] else None
-        },
-        {
-            "name": "KuCoin",
-            "url": "https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=USDT-USDT",
-            "parser": lambda data: float(data['data']['price']) if data.get('data') else None
-        }
-    ]
-    
-    for source in sources:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(source["url"], timeout=10, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        rate = source["parser"](data)
-                        if rate and rate > 0:
-                            logger.info(f"USDT/USD from {source['name']}: {rate}")
-                            return rate
-        except Exception as e:
-            logger.warning(f"Ошибка получения USDT/USD из {source['name']}: {e}")
-    
-    return 1.0
-
 async def fetch_real_rate(crypto: str) -> Optional[float]:
-    """Получение реального курса с использованием множества API"""
+    """Получение реального курса"""
     try:
         if crypto == 'ton':
+            # Сначала пробуем прямой курс TON/RUB
+            direct_rate = await fetch_ton_rub_direct()
+            if direct_rate:
+                return direct_rate
+            
+            # Затем через TON/USDT + USDT/RUB
             ton_usdt = await fetch_ton_usdt_multiple()
-            if not ton_usdt:
-                logger.warning("Не удалось получить TON/USDT")
-                return None
-            
-            usd_rub = await fetch_usd_rub()
-            if not usd_rub:
-                logger.warning("Не удалось получить USD/RUB")
-                return None
-            
-            rate = ton_usdt * usd_rub
-            logger.info(f"✅ TON/RUB рассчитан: {rate:.2f} ₽ (TON/USDT: {ton_usdt}, USD/RUB: {usd_rub})")
-            return rate
-        
-        elif crypto in ('usdt_ton', 'usdt_trc20'):
-            usdt_usd = await fetch_usdt_usd_multiple()
-            if usdt_usd:
-                usd_rub = await fetch_usd_rub()
-                if usd_rub:
-                    rate = usdt_usd * usd_rub
-                    logger.info(f"✅ USDT/RUB рассчитан: {rate:.2f} ₽ (USDT/USD: {usdt_usd}, USD/RUB: {usd_rub})")
+            if ton_usdt:
+                usdt_rub = await fetch_usdt_rub_crypto_bot() or await fetch_usdt_rub_binance() or await fetch_usdt_rub_coingecko() or await fetch_usdt_rub_cbr()
+                if usdt_rub:
+                    rate = ton_usdt * usdt_rub
+                    logger.info(f"TON/RUB рассчитан: {rate:.2f} ₽ (TON/USDT: {ton_usdt}, USDT/RUB: {usdt_rub})")
                     return rate
             
-            direct_rate = await fetch_usdt_rub_direct()
-            if direct_rate:
-                logger.info(f"✅ USDT/RUB прямой: {direct_rate:.2f} ₽")
-                return direct_rate
+            return None
+        
+        elif crypto in ('usdt_ton', 'usdt_trc20'):
+            # Пробуем разные источники для USDT/RUB
+            rate = await fetch_usdt_rub_crypto_bot() or await fetch_usdt_rub_binance() or await fetch_usdt_rub_coingecko() or await fetch_usdt_rub_cbr()
+            if rate:
+                logger.info(f"USDT/RUB: {rate:.2f} ₽")
+                return rate
+            
+            return None
     
     except Exception as e:
         logger.error(f"Ошибка получения курса {crypto}: {e}")
@@ -642,7 +618,7 @@ async def update_rates_periodically():
 
 # -------------------- ПРОВЕРКА ТРАНЗАКЦИЙ --------------------
 async def check_ton_transaction(memo: str) -> Optional[Dict]:
-    """Проверка транзакций TON через TON Center API"""
+    """Проверка транзакций TON"""
     try:
         address = WALLETS['ton']
         if not address or address in ("EQD...", ""):
@@ -669,8 +645,40 @@ async def check_ton_transaction(memo: str) -> Optional[Dict]:
         logger.error(f"Ошибка проверки TON: {e}")
         return None
 
+async def check_usdt_ton_transaction(memo: str) -> Optional[Dict]:
+    """Проверка транзакций USDT в сети TON"""
+    try:
+        address = WALLETS['usdt_ton']
+        if not address or address in ("EQD...", ""):
+            return None
+        
+        # Для USDT в сети TON используем TON Center API с фильтром по jetton
+        url = "https://toncenter.com/api/v2/getTransactions"
+        params = {'address': address, 'limit': 50}
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=10) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                
+                for tx in data.get('result', []):
+                    in_msg = tx.get('in_msg')
+                    if in_msg and in_msg.get('message') == memo:
+                        # Для USDT нужно проверять transfer notification
+                        # Упрощённая проверка, в реальности нужно больше логики
+                        value = in_msg.get('value', '0')
+                        if value and int(value) > 0:
+                            amount_usdt = int(value) / 1e9  # TON имеет 9 decimals
+                            tx_hash = tx.get('transaction_id', {}).get('hash')
+                            return {'amount': amount_usdt, 'tx_hash': tx_hash}
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка проверки USDT TON: {e}")
+        return None
+
 async def check_trc20_transaction(memo: str) -> Optional[Dict]:
-    """Проверка транзакций USDT TRC20 через TronGrid API"""
+    """Проверка транзакций USDT TRC20"""
     try:
         address = WALLETS['usdt_trc20']
         if not address or address in ("T...", ""):
@@ -702,8 +710,10 @@ async def check_transaction_with_retry(crypto: str, memo: str, max_retries: int 
     """Проверка транзакции с повторными попытками"""
     for attempt in range(max_retries):
         try:
-            if crypto in ('ton', 'usdt_ton'):
+            if crypto == 'ton':
                 result = await check_ton_transaction(memo)
+            elif crypto == 'usdt_ton':
+                result = await check_usdt_ton_transaction(memo)
             elif crypto == 'usdt_trc20':
                 result = await check_trc20_transaction(memo)
             else:
@@ -767,7 +777,7 @@ async def check_deposits():
                         f"✅ *Обмен выполнен*\n\n"
                         f"💰 Зачислено: {rub_amount:.2f} ₽\n"
                         f"📊 Курс: {rate:.2f} ₽ за {crypto.upper()}\n"
-                        f"💸 Комиссия: {fee:.2f} ₽\n"
+                        f"💸 Комиссия ({commission}%): -{fee:.2f} ₽\n"
                         f"🔗 Хэш: `{tx_hash}`",
                         parse_mode="Markdown"
                     )
@@ -926,8 +936,7 @@ async def send_welcome_message(target, user_id: int, username: str, ref_by: int 
         "5️⃣ Вы можете вывести рубли на карту или счёт\n\n"
         f"💸 *Комиссия сервиса*: {get_commission()}%\n"
         f"🎁 *Реферальная программа*: {get_referral_percent()}% от суммы обменов ваших рефералов\n\n"
-        f"💰 *Минимальная сумма вывода*: {MIN_WITHDRAWAL:.0f} ₽\n"
-        f"💎 *Минимальная сумма обмена*: {MIN_EXCHANGE} USD\n\n"
+        f"💰 *Минимальная сумма вывода*: {MIN_WITHDRAWAL:.0f} ₽\n\n"
         "⬇️ *Выберите действие*"
     )
     
@@ -1013,8 +1022,7 @@ async def exchange_menu(callback: types.CallbackQuery, state: FSMContext):
         "Выберите криптовалюту, которую хотите обменять\n\n"
         "💎 *TON* - нативный токен сети TON\n"
         "💰 *USDT (TON)* - стейблкоин в сети TON\n"
-        "💵 *USDT (TRC20)* - стейблкоин в сети TRON\n\n"
-        f"💰 *Минимальная сумма*: {MIN_EXCHANGE} USD"
+        "💵 *USDT (TRC20)* - стейблкоин в сети TRON"
     )
     await edit_or_send_message(callback, text, exchange_menu_kb())
 
@@ -1043,8 +1051,7 @@ async def exchange_select_crypto(callback: types.CallbackQuery, state: FSMContex
     text = (
         f"🔄 *Обмен {crypto.upper()} на рубли*\n\n"
         f"Текущий курс: 1 {crypto.upper()} = {rate:.2f} ₽\n"
-        f"Комиссия сервиса: {get_commission()}%\n"
-        f"Минимальная сумма: {MIN_EXCHANGE} USD\n\n"
+        f"Комиссия сервиса: {get_commission()}%\n\n"
         "Введите сумму, которую хотите обменять (в криптовалюте)"
     )
     
@@ -1068,18 +1075,6 @@ async def exchange_amount(message: types.Message, state: FSMContext):
     data = await state.get_data()
     crypto = data['crypto']
     rate = get_exchange_rate(crypto)
-    
-    # Проверка минимальной суммы
-    min_amount_usd = MIN_EXCHANGE
-    amount_usd = amount_crypto * rate / get_exchange_rate('usdt_trc20')
-    if amount_usd < min_amount_usd:
-        await message.answer(
-            f"❌ Минимальная сумма обмена: {min_amount_usd} USD\n"
-            f"Для {crypto.upper()} это примерно {min_amount_usd * get_exchange_rate('usdt_trc20') / rate:.4f} {crypto.upper()}",
-            reply_markup=cancel_kb()
-        )
-        return
-    
     commission = get_commission()
     gross_rub = amount_crypto * rate
     fee = gross_rub * commission / 100
@@ -1324,7 +1319,7 @@ async def support(callback: types.CallbackQuery, state: FSMContext):
     text = f"🆘 *Поддержка*\n\nЕсли у вас возникли вопросы или проблемы, свяжитесь с нашим специалистом\n\n👉 @{escape_markdown(SUPPORT_USERNAME)}"
     await edit_or_send_message(callback, text, back_to_main_kb())
 
-# -------------------- АДМИНКА --------------------
+# -------------------- АДМИНКА (полная версия) --------------------
 @dp.message(Command("admin"))
 async def admin_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
@@ -1746,7 +1741,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return "Bot is running on Railway!"
+    return "Bot is running!"
 
 @app.route('/health')
 def health():
