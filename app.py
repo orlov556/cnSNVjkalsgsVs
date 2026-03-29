@@ -5,7 +5,6 @@ import time
 import aiohttp
 import logging
 import threading
-import re
 from datetime import datetime, timedelta
 from collections import defaultdict
 from flask import Flask
@@ -22,7 +21,7 @@ ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(","
 WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")
 SUPPORT_LINK = "https://t.me/cryptohelp_01"
 
-# КОШЕЛЬКИ
+# ОБНОВЛЕННЫЕ КОШЕЛЬКИ
 TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
 USDT_TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
 USDT_TRC20_WALLET = "TGt4Jpn5xk7CzkxeDynnkhwVyDDU124g6B"
@@ -107,20 +106,6 @@ c.execute("INSERT OR IGNORE INTO exchange_rates (crypto, rate_rub) VALUES (?, ?)
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('commission', '7'))
 c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('referral_percent', '1'))
 conn.commit()
-
-# ============= ФУНКЦИИ ДЛЯ ЭКРАНИРОВАНИЯ MARKDOWN =============
-def escape_markdown_v2(text):
-    """Экранирование специальных символов для MarkdownV2"""
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', str(text))
-
-def safe_send(message, text, reply_markup=None):
-    """Безопасная отправка сообщения без Markdown при ошибке"""
-    try:
-        return message.answer(text, parse_mode="MarkdownV2", reply_markup=reply_markup)
-    except:
-        # Если Markdown не работает, отправляем без форматирования
-        return message.answer(text.replace('_', '').replace('*', ''), reply_markup=reply_markup)
 
 # ============= ФУНКЦИИ БД =============
 def get_user(user_id):
@@ -282,13 +267,13 @@ async def update_rates_loop():
             if usdt:
                 last_known_rates['usdt'] = usdt
                 set_exchange_rate('usdt', usdt)
-                logger.info(f"USDT курс: {usdt:.2f} ₽")
+                logger.info(f"✅ USDT курс: {usdt:.2f} ₽")
             
             ton = await get_ton_rate()
             if ton:
                 last_known_rates['ton'] = ton
                 set_exchange_rate('ton', ton)
-                logger.info(f"TON курс: {ton:.2f} ₽")
+                logger.info(f"✅ TON курс: {ton:.2f} ₽")
         except Exception as e:
             logger.error(f"Ошибка обновления курсов: {e}")
         await asyncio.sleep(30)
@@ -580,12 +565,18 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
     address = WALLETS[crypto]
     deposit_id = add_deposit(user_id, crypto, memo, amount)
     
-    # Формируем текст инструкции (без Markdown)
+    # Формируем текст инструкции с кнопками для копирования
     if crypto in ('usdt_ton', 'usdt_trc20'):
         text = (
             f"🔄 ОБМЕН {crypto.upper()}\n\n"
-            f"📤 Отправьте на адрес:\n{address}\n\n"
-            f"📝 Обязательный комментарий (memo):\n{memo}\n\n"
+            f"📤 Отправьте на адрес:\n"
+            f"┌─────────────────────────────┐\n"
+            f"{address}\n"
+            f"└─────────────────────────────┘\n\n"
+            f"📝 Обязательный комментарий (memo):\n"
+            f"┌─────────────────────────────┐\n"
+            f"{memo}\n"
+            f"└─────────────────────────────┘\n\n"
             f"💰 Вы получите: {net:.2f} ₽\n"
             f"💸 Комиссия: {get_commission()}%\n\n"
             f"⚡️ ВАЖНО!\n"
@@ -596,6 +587,8 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
             f"👨‍💼 Администратор проверит транзакцию и зачислит средства."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 КОПИРОВАТЬ АДРЕС", callback_data=f"copy_address_{deposit_id}"),
+             InlineKeyboardButton(text="📝 КОПИРОВАТЬ MEMO", callback_data=f"copy_memo_{deposit_id}")],
             [InlineKeyboardButton(text="🔍 ПРОВЕРИТЬ ОБМЕН", callback_data=f"check_usdt_{deposit_id}")],
             [InlineKeyboardButton(text="❌ ОТМЕНИТЬ", callback_data="back")]
         ])
@@ -603,8 +596,14 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
         # Для TON - автоматическая проверка
         text = (
             f"🔄 ОБМЕН {crypto.upper()}\n\n"
-            f"📤 Отправьте на адрес:\n{address}\n\n"
-            f"📝 Обязательный комментарий (memo):\n{memo}\n\n"
+            f"📤 Отправьте на адрес:\n"
+            f"┌─────────────────────────────┐\n"
+            f"{address}\n"
+            f"└─────────────────────────────┘\n\n"
+            f"📝 Обязательный комментарий (memo):\n"
+            f"┌─────────────────────────────┐\n"
+            f"{memo}\n"
+            f"└─────────────────────────────┘\n\n"
             f"💰 Вы получите: {net:.2f} ₽\n"
             f"💸 Комиссия: {get_commission()}%\n\n"
             f"⚡️ ВАЖНО!\n"
@@ -616,6 +615,8 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
             f"• Обычно это занимает 1-5 минут"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 КОПИРОВАТЬ АДРЕС", callback_data=f"copy_address_{deposit_id}"),
+             InlineKeyboardButton(text="📝 КОПИРОВАТЬ MEMO", callback_data=f"copy_memo_{deposit_id}")],
             [InlineKeyboardButton(text="◀️ В ГЛАВНОЕ МЕНЮ", callback_data="back")]
         ])
     
@@ -625,11 +626,36 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
     except:
         pass
     
-    # Отправляем новое сообщение с инструкцией (без Markdown)
+    # Отправляем новое сообщение с инструкцией
     await cb.message.answer(text, reply_markup=kb)
+    
+    # Сохраняем memo и address для копирования
+    await state.update_data(last_address=address, last_memo=memo, last_deposit_id=deposit_id)
     
     await state.clear()
     await cb.answer()
+
+# ============= КОПИРОВАНИЕ АДРЕСА И MEMO =============
+@dp.callback_query(F.data.startswith("copy_address_"))
+async def copy_address(cb: types.CallbackQuery, state: FSMContext):
+    deposit_id = int(cb.data.split("_")[2])
+    c.execute("SELECT memo, crypto FROM deposits WHERE id = ?", (deposit_id,))
+    dep = c.fetchone()
+    if dep:
+        address = WALLETS[dep[1]]
+        await cb.answer(f"✅ Адрес скопирован!\n\n{address}", show_alert=True)
+    else:
+        await cb.answer("❌ Данные не найдены", show_alert=True)
+
+@dp.callback_query(F.data.startswith("copy_memo_"))
+async def copy_memo(cb: types.CallbackQuery, state: FSMContext):
+    deposit_id = int(cb.data.split("_")[2])
+    c.execute("SELECT memo FROM deposits WHERE id = ?", (deposit_id,))
+    dep = c.fetchone()
+    if dep:
+        await cb.answer(f"✅ Memo скопирован!\n\n{dep[0]}", show_alert=True)
+    else:
+        await cb.answer("❌ Данные не найдены", show_alert=True)
 
 # ============= USDT ПРОВЕРКА АДМИНОМ =============
 @dp.callback_query(F.data.startswith("check_usdt_"))
@@ -962,12 +988,17 @@ async def admin_rate_set(m: types.Message, state: FSMContext):
     await m.answer(f"✅ Курс {data['crypto'].upper()} = {rate:.2f} ₽", reply_markup=admin_kb())
     await state.clear()
 
-# Кошельки
+# Кошельки - ИСПРАВЛЕНО
 @dp.callback_query(F.data == "admin_wallets")
 async def admin_wallets_menu(cb: types.CallbackQuery):
     text = "💰 Управление кошельками\n\n"
     for crypto, wallet in WALLETS.items():
-        text += f"• {crypto.upper()}: {wallet[:15]}...\n"
+        display_name = crypto.upper()
+        if crypto == 'usdt_ton':
+            display_name = 'USDT TON'
+        elif crypto == 'usdt_trc20':
+            display_name = 'USDT TRC20'
+        text += f"• {display_name}: {wallet[:20]}...\n"
     await edit_or_send(cb, text, InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 TON", callback_data="wallet_ton")],
         [InlineKeyboardButton(text="💰 USDT TON", callback_data="wallet_usdt_ton")],
@@ -977,13 +1008,31 @@ async def admin_wallets_menu(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("wallet_"))
 async def admin_wallet_select(cb: types.CallbackQuery, state: FSMContext):
-    crypto = cb.data.split("_")[1]
+    # Получаем полное название валюты
+    if cb.data == "wallet_ton":
+        crypto = "ton"
+    elif cb.data == "wallet_usdt_ton":
+        crypto = "usdt_ton"
+    elif cb.data == "wallet_usdt_trc20":
+        crypto = "usdt_trc20"
+    else:
+        await cb.answer("❌ Валюта не найдена", show_alert=True)
+        return
+    
     if crypto not in WALLETS:
         await cb.answer("❌ Валюта не найдена", show_alert=True)
         return
+    
     await state.update_data(crypto=crypto)
     current = WALLETS[crypto]
-    await edit_or_send(cb, f"🔧 Изменение кошелька {crypto.upper()}\n\nТекущий кошелёк:\n{current}\n\nВведите новый адрес:", admin_kb())
+    
+    display_name = crypto.upper()
+    if crypto == 'usdt_ton':
+        display_name = 'USDT TON'
+    elif crypto == 'usdt_trc20':
+        display_name = 'USDT TRC20'
+    
+    await edit_or_send(cb, f"🔧 Изменение кошелька {display_name}\n\nТекущий кошелёк:\n{current}\n\nВведите новый адрес:", admin_kb())
     await state.set_state(AdminWallet.address)
 
 @dp.message(AdminWallet.address)
@@ -994,7 +1043,14 @@ async def admin_wallet_set(m: types.Message, state: FSMContext):
         return
     data = await state.get_data()
     WALLETS[data['crypto']] = address
-    await m.answer(f"✅ Кошелёк {data['crypto'].upper()} обновлён", reply_markup=admin_kb())
+    
+    display_name = data['crypto'].upper()
+    if data['crypto'] == 'usdt_ton':
+        display_name = 'USDT TON'
+    elif data['crypto'] == 'usdt_trc20':
+        display_name = 'USDT TRC20'
+    
+    await m.answer(f"✅ Кошелёк {display_name} обновлён", reply_markup=admin_kb())
     await state.clear()
 
 # Комиссия
