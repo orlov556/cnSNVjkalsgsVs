@@ -6,6 +6,7 @@ import aiohttp
 import logging
 import threading
 import base64
+import re
 from datetime import datetime, timedelta
 from collections import defaultdict
 from flask import Flask
@@ -49,6 +50,12 @@ MAX_WITHDRAWAL = 100000
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============= ФУНКЦИЯ ДЛЯ ЭКРАНИРОВАНИЯ MARKDOWN =============
+def escape_markdown(text):
+    """Экранирование специальных символов Markdown"""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', str(text))
 
 # ============= БАЗА ДАННЫХ =============
 conn = sqlite3.connect("exchange.db", check_same_thread=False)
@@ -380,8 +387,7 @@ async def check_deposits_loop(bot):
                         f"✅ *Обмен TON выполнен!*\n\n"
                         f"💰 Зачислено: {rub:.2f} ₽\n"
                         f"📊 Курс: {rate:.2f} ₽\n"
-                        f"💸 Комиссия: {fee:.2f} ₽\n"
-                        f"🔗 Хэш транзакции: `{tx['tx_hash'][:20]}...`",
+                        f"💸 Комиссия: {fee:.2f} ₽",
                         parse_mode="Markdown"
                     )
                     
@@ -654,6 +660,10 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
     address = WALLETS[crypto]
     deposit_id = add_deposit(user_id, crypto, memo, amount)
     
+    # Экранируем специальные символы
+    safe_address = escape_markdown(address)
+    safe_memo = escape_markdown(memo)
+    
     # Удаляем старое сообщение с подтверждением
     try:
         await cb.message.delete()
@@ -665,9 +675,9 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
         text = (
             f"🔄 *Обмен {crypto.upper()}*\n\n"
             f"📤 *Отправьте на адрес:*\n"
-            f"`{address}`\n\n"
+            f"`{safe_address}`\n\n"
             f"📝 *Обязательный комментарий (memo):*\n"
-            f"`{memo}`\n\n"
+            f"`{safe_memo}`\n\n"
             f"💰 *Вы получите:* {net:.2f} ₽ (после вычета комиссии {get_commission()}%)\n\n"
             f"⚡️ *ВАЖНО!*\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
@@ -685,9 +695,9 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
         text = (
             f"🔄 *Обмен {crypto.upper()}*\n\n"
             f"📤 *Отправьте на адрес:*\n"
-            f"`{address}`\n\n"
+            f"`{safe_address}`\n\n"
             f"📝 *Обязательный комментарий (memo):*\n"
-            f"`{memo}`\n\n"
+            f"`{safe_memo}`\n\n"
             f"💰 *Вы получите:* {net:.2f} ₽ (после вычета комиссии {get_commission()}%)\n\n"
             f"⚡️ *ВАЖНО!*\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
@@ -780,9 +790,9 @@ async def check_usdt(cb: types.CallbackQuery):
             f"👤 Пользователь: `{dep[1]}`\n"
             f"💎 Валюта: {dep[2].upper()}\n"
             f"📊 Сумма: {dep[4]:.4f} {dep[2].upper()}\n"
-            f"📝 Memo: `{dep[3]}`\n"
+            f"📝 Memo: `{escape_markdown(dep[3])}`\n"
             f"💰 К получению: {net:.2f} ₽\n\n"
-            f"💰 Кошелёк для проверки: `{WALLETS[dep[2]]}`\n\n"
+            f"💰 Кошелёк для проверки: `{escape_markdown(WALLETS[dep[2]])}`\n\n"
             f"Проверьте транзакцию и подтвердите.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -931,7 +941,7 @@ async def referrals_cb(cb: types.CallbackQuery, state: FSMContext):
     ref_percent = get_referral_percent()
     await edit_or_send(cb,
         f"👥 *Реферальная программа*\n\n"
-        f"🔗 Ваша реферальная ссылка:\n`{link}`\n\n"
+        f"🔗 Ваша реферальная ссылка:\n`{escape_markdown(link)}`\n\n"
         f"👤 Приглашено: *{invited}* чел\n"
         f"🎁 Заработано бонусов: *{bonus:.2f} ₽*\n\n"
         f"💡 Вы получаете *{ref_percent}%* от суммы обменов ваших рефералов (после вычета комиссии)\n"
@@ -990,7 +1000,7 @@ async def admin_requests(cb: types.CallbackQuery):
             f"📋 *Заявка #{w[0]}*\n"
             f"👤 Пользователь: `{w[1]}`\n"
             f"💰 Сумма: {w[2]:.2f} ₽\n"
-            f"📝 Реквизиты: `{w[3]}`\n"
+            f"📝 Реквизиты: `{escape_markdown(w[3])}`\n"
             f"🏷 Статус: {w[4]}",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1031,7 +1041,7 @@ async def reject_comment(m: types.Message, state: FSMContext):
     if w:
         update_withdrawal_status(wid, 'rejected', m.text)
         update_balance(w[1], w[2])
-        await bot.send_message(w[1], f"❌ *Вывод #{wid} отклонён*\nПричина: {m.text}", parse_mode="Markdown")
+        await bot.send_message(w[1], f"❌ *Вывод #{wid} отклонён*\nПричина: {escape_markdown(m.text)}", parse_mode="Markdown")
         await m.answer(f"✅ Заявка #{wid} отклонена, средства возвращены.", reply_markup=admin_kb())
     else:
         await m.answer("❌ Заявка не найдена.", reply_markup=admin_kb())
@@ -1163,7 +1173,7 @@ async def admin_wallet_select(cb: types.CallbackQuery, state: FSMContext):
     await state.update_data(crypto=crypto)
     current = WALLETS[crypto]
     name = crypto.upper().replace('_', ' ')
-    await edit_or_send(cb, f"🔧 *Изменение кошелька {name}*\n\nТекущий адрес:\n`{current}`\n\nВведите новый адрес:", admin_kb())
+    await edit_or_send(cb, f"🔧 *Изменение кошелька {name}*\n\nТекущий адрес:\n`{escape_markdown(current)}`\n\nВведите новый адрес:", admin_kb())
     await state.set_state(AdminWallet.address)
 
 @dp.message(AdminWallet.address)
