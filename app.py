@@ -377,19 +377,13 @@ async def check_deposits_loop(bot):
                     
                     await bot.send_message(
                         user_id,
-                        f"✅ ОБМЕН TON ВЫПОЛНЕН!\n\n"
-                        f"💰 Зачислено: {rub:.2f} ₽\n"
-                        f"📊 Курс: {rate:.2f} ₽\n"
-                        f"💸 Комиссия: {fee:.2f} ₽"
+                        f"✅ Обмен TON выполнен!\n\n💰 Зачислено: {rub:.2f} ₽\n📊 Курс: {rate:.2f} ₽\n💸 Комиссия: {fee:.2f} ₽"
                     )
                     
                     for admin_id in ADMIN_IDS:
                         await bot.send_message(
                             admin_id,
-                            f"✅ НОВЫЙ ОБМЕН TON\n\n"
-                            f"👤 Пользователь: {user_id}\n"
-                            f"💰 Сумма: {tx['amount']:.4f} TON\n"
-                            f"💵 Выплачено: {rub:.2f} ₽"
+                            f"✅ Новый обмен TON\n\n👤 Пользователь: {user_id}\n💰 Сумма: {tx['amount']:.4f} TON\n💵 Выплачено: {rub:.2f} ₽"
                         )
                     
                     logger.info(f"✅ Депозит #{deposit_id}: пользователь {user_id}, сумма {tx['amount']} TON -> {rub} RUB")
@@ -511,10 +505,10 @@ async def welcome(target, user_id, username, ref_by=None):
     
     text = (
         f"✨ Добро пожаловать в CryptoExchangeBot ✨\n\n"
-        f"💸 Комиссия: {get_commission()}%\n"
-        f"🎁 Рефералка: {get_referral_percent()}%\n\n"
-        f"💰 Мин. вывод: {get_min_withdrawal():.0f} ₽\n"
-        f"💎 Мин. обмен: {MIN_EXCHANGE} TON/USDT\n\n"
+        f"💸 Комиссия сервиса: {get_commission()}%\n"
+        f"🎁 Реферальная программа: {get_referral_percent()}%\n\n"
+        f"💰 Мин. сумма вывода: {get_min_withdrawal():.0f} ₽\n"
+        f"💎 Мин. сумма обмена: {MIN_EXCHANGE} TON / 1 USDT\n\n"
         "⬇️ Выберите действие"
     )
     
@@ -567,29 +561,32 @@ async def back_cb(cb: types.CallbackQuery, state: FSMContext):
 async def balance_cb(cb: types.CallbackQuery, state: FSMContext):
     await state.clear()
     bal = get_balance(cb.from_user.id)
-    await edit_or_send(cb, f"💰 Баланс: {bal:.2f} ₽", back_kb())
+    await edit_or_send(cb, f"💰 Ваш баланс\n\n{bal:.2f} ₽", back_kb())
 
 @dp.callback_query(F.data == "exchange")
 async def exchange_menu(cb: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    await edit_or_send(cb, "🔄 Выберите валюту:", exchange_kb())
+    await edit_or_send(cb, 
+        "🔄 Обмен криптовалюты на рубли\n\n"
+        "Выберите криптовалюту:",
+        exchange_kb())
 
 @dp.callback_query(F.data.startswith("exch_"))
 async def exch_select(cb: types.CallbackQuery, state: FSMContext):
     crypto = cb.data[5:]
     
     if crypto not in WALLETS:
-        await cb.answer(f"❌ Ошибка", show_alert=True)
+        await cb.answer(f"❌ Ошибка: валюта {crypto} не найдена", show_alert=True)
         return
     
     await state.update_data(crypto=crypto)
     rate = get_exchange_rate(crypto)
     await edit_or_send(cb,
-        f"🔄 Обмен {crypto.upper()}\n\n"
-        f"Курс: 1 = {rate:.2f} ₽\n"
-        f"Комиссия: {get_commission()}%\n"
-        f"Мин: {MIN_EXCHANGE} {crypto.upper()}\n\n"
-        "Введите сумму:",
+        f"🔄 Обмен {crypto.upper()} на рубли\n\n"
+        f"Текущий курс: 1 {crypto.upper()} = {rate:.2f} ₽\n"
+        f"Комиссия сервиса: {get_commission()}%\n"
+        f"Минимальная сумма: {MIN_EXCHANGE} {crypto.upper()}\n\n"
+        "Введите сумму в криптовалюте:",
         cancel_kb())
     await state.set_state(Exchange.amount)
 
@@ -598,10 +595,10 @@ async def exch_amount(m: types.Message, state: FSMContext):
     try:
         amount = float(m.text)
         if amount < MIN_EXCHANGE:
-            await m.answer(f"❌ Мин. {MIN_EXCHANGE}", reply_markup=cancel_kb())
+            await m.answer(f"❌ Минимальная сумма: {MIN_EXCHANGE}", reply_markup=cancel_kb())
             return
     except:
-        await m.answer("❌ Введите число", reply_markup=cancel_kb())
+        await m.answer("❌ Введите положительное число", reply_markup=cancel_kb())
         return
     
     data = await state.get_data()
@@ -615,10 +612,10 @@ async def exch_amount(m: types.Message, state: FSMContext):
     await m.answer(
         f"🔄 Обмен {crypto.upper()}\n\n"
         f"Сумма: {amount:.4f} {crypto.upper()}\n"
-        f"Курс: 1 = {rate:.2f} ₽\n"
-        f"Комиссия: -{fee:.2f} ₽\n"
+        f"Курс: 1 {crypto.upper()} = {rate:.2f} ₽\n"
+        f"Комиссия ({get_commission()}%): -{fee:.2f} ₽\n"
         f"Вы получите: {net:.2f} ₽\n\n"
-        "Подтверждаете?",
+        "Подтверждаете обмен?",
         reply_markup=confirm_kb())
 
 @dp.callback_query(F.data == "confirm")
@@ -637,27 +634,32 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
     deposit_id = add_deposit(user_id, crypto, memo, amount)
     
     text = (
-        f"🔄 ОБМЕН {crypto.upper()}\n\n"
-        f"📤 АДРЕС:\n{address}\n\n"
-        f"📝 MEMO:\n{memo}\n\n"
-        f"💰 Вы получите: {net:.2f} ₽"
+        f"🔄 Обмен {crypto.upper()}\n\n"
+        f"📤 Отправьте на адрес:\n{address}\n\n"
+        f"📝 Обязательный комментарий (memo):\n{memo}\n\n"
+        f"💰 Вы получите: {net:.2f} ₽\n"
+        f"💸 Комиссия: {get_commission()}%\n\n"
+        f"⚡️ ВАЖНО!\n"
+        f"• Переводите ТОЛЬКО {crypto.upper()}\n"
+        f"• Обязательно укажите комментарий (memo)\n"
+        f"• Без комментария средства не зачислятся!"
     )
     
     if crypto in ('usdt_ton', 'usdt_trc20'):
-        text += f"\n\n✅ После отправки нажмите «ПРОВЕРИТЬ»"
+        text += f"\n\n✅ После отправки нажмите кнопку «Проверить»"
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📋 АДРЕС", callback_data=f"copy_address_{deposit_id}"),
-             InlineKeyboardButton(text="📋 MEMO", callback_data=f"copy_memo_{deposit_id}")],
-            [InlineKeyboardButton(text="🔍 ПРОВЕРИТЬ", callback_data=f"check_usdt_{deposit_id}")],
-            [InlineKeyboardButton(text="❌ ОТМЕНА", callback_data="back")]
+            [InlineKeyboardButton(text="📋 Адрес", callback_data=f"copy_address_{deposit_id}"),
+             InlineKeyboardButton(text="📋 Memo", callback_data=f"copy_memo_{deposit_id}")],
+            [InlineKeyboardButton(text="🔍 Проверить", callback_data=f"check_usdt_{deposit_id}")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="back")]
         ])
     else:
-        text += f"\n\n🤖 Автоматическое зачисление (1-5 мин)\n⚠️ Если прошло >10 мин - нажмите «ПРОВЕРИТЬ»"
+        text += f"\n\n🤖 Автоматическое зачисление (1-5 минут)\n⚠️ Если прошло больше 10 минут - нажмите «Проверить»"
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📋 АДРЕС", callback_data=f"copy_address_{deposit_id}"),
-             InlineKeyboardButton(text="📋 MEMO", callback_data=f"copy_memo_{deposit_id}")],
-            [InlineKeyboardButton(text="🔍 ПРОВЕРИТЬ", callback_data=f"check_ton_{deposit_id}")],
-            [InlineKeyboardButton(text="◀️ МЕНЮ", callback_data="back")]
+            [InlineKeyboardButton(text="📋 Адрес", callback_data=f"copy_address_{deposit_id}"),
+             InlineKeyboardButton(text="📋 Memo", callback_data=f"copy_memo_{deposit_id}")],
+            [InlineKeyboardButton(text="🔍 Проверить", callback_data=f"check_ton_{deposit_id}")],
+            [InlineKeyboardButton(text="◀️ Меню", callback_data="back")]
         ])
     
     try:
@@ -669,7 +671,7 @@ async def exch_confirm(cb: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await cb.answer()
 
-# ============= КОПИРОВАНИЕ (АВТОМАТИЧЕСКОЕ КОПИРОВАНИЕ В БУФЕР) =============
+# ============= КОПИРОВАНИЕ (РАБОТАЕТ АВТОМАТИЧЕСКИ) =============
 @dp.callback_query(F.data.startswith("copy_address_"))
 async def copy_address(cb: types.CallbackQuery):
     deposit_id = int(cb.data.split("_")[2])
@@ -677,7 +679,6 @@ async def copy_address(cb: types.CallbackQuery):
     dep = c.fetchone()
     if dep:
         address = WALLETS[dep[0]]
-        # Текст автоматически копируется при нажатии на OK в всплывающем окне
         await cb.answer(f"{address}", show_alert=True)
     else:
         await cb.answer("❌ Данные не найдены", show_alert=True)
@@ -688,7 +689,6 @@ async def copy_memo(cb: types.CallbackQuery):
     c.execute("SELECT memo FROM deposits WHERE id = ?", (deposit_id,))
     dep = c.fetchone()
     if dep:
-        # Текст автоматически копируется при нажатии на OK в всплывающем окне
         await cb.answer(f"{dep[0]}", show_alert=True)
     else:
         await cb.answer("❌ Данные не найдены", show_alert=True)
@@ -713,7 +713,7 @@ async def check_ton_manual(cb: types.CallbackQuery):
         await cb.answer("⚠️ Подождите 10 минут", show_alert=True)
         return
     
-    await cb.answer("🔍 Проверяем...")
+    await cb.answer("🔍 Проверяем транзакцию...")
     
     tx = await check_ton_tx(dep[3], dep[4])
     
@@ -728,12 +728,12 @@ async def check_ton_manual(cb: types.CallbackQuery):
         
         await bot.send_message(
             dep[1],
-            f"✅ ОБМЕН TON ПОДТВЕРЖДЁН!\n\n💰 Зачислено: {rub:.2f} ₽"
+            f"✅ Обмен TON подтверждён!\n\n💰 Зачислено: {rub:.2f} ₽"
         )
         
         await cb.message.edit_text("✅ Транзакция найдена! Средства зачислены.")
     else:
-        await cb.answer("❌ Транзакция не найдена. Проверьте memo.", show_alert=True)
+        await cb.answer("❌ Транзакция не найдена. Проверьте правильность memo.", show_alert=True)
 
 # ============= USDT ПРОВЕРКА =============
 @dp.callback_query(F.data.startswith("check_usdt_"))
@@ -758,14 +758,19 @@ async def check_usdt(cb: types.CallbackQuery):
     for admin_id in ADMIN_IDS:
         await bot.send_message(
             admin_id,
-            f"📢 ЗАПРОС\n\n👤 {dep[1]}\n💎 {dep[2].upper()}\n📊 {dep[4]:.4f}\n📝 {dep[3]}\n💰 {net:.2f} ₽",
+            f"📢 Запрос на подтверждение обмена\n\n"
+            f"👤 Пользователь: {dep[1]}\n"
+            f"💎 Валюта: {dep[2].upper()}\n"
+            f"📊 Сумма: {dep[4]:.4f} {dep[2].upper()}\n"
+            f"📝 Memo: {dep[3]}\n"
+            f"💰 К получению: {net:.2f} ₽",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ ПОДТВЕРДИТЬ", callback_data=f"confirm_usdt_{deposit_id}"),
-                 InlineKeyboardButton(text="❌ ОТКЛОНИТЬ", callback_data=f"reject_usdt_{deposit_id}")]
+                [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_usdt_{deposit_id}"),
+                 InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_usdt_{deposit_id}")]
             ])
         )
     
-    await cb.answer("✅ Запрос отправлен админу", show_alert=True)
+    await cb.answer("✅ Запрос отправлен администратору", show_alert=True)
 
 @dp.callback_query(F.data.startswith("confirm_usdt_"))
 async def confirm_usdt(cb: types.CallbackQuery):
@@ -778,7 +783,7 @@ async def confirm_usdt(cb: types.CallbackQuery):
     dep = c.fetchone()
     
     if not dep or dep[5] != 'pending':
-        await cb.answer("❌ Уже обработана", show_alert=True)
+        await cb.answer("❌ Заявка уже обработана", show_alert=True)
         return
     
     rate = get_exchange_rate(dep[2])
@@ -787,7 +792,11 @@ async def confirm_usdt(cb: types.CallbackQuery):
     update_balance(dep[1], rub)
     complete_deposit(deposit_id, dep[4], rub, dep[1], None)
     
-    await bot.send_message(dep[1], f"✅ ОБМЕН {dep[2].upper()} ПОДТВЕРЖДЁН!\n\n💰 Зачислено: {rub:.2f} ₽")
+    await bot.send_message(
+        dep[1],
+        f"✅ Обмен {dep[2].upper()} подтверждён!\n\n💰 Зачислено: {rub:.2f} ₽"
+    )
+    
     await cb.message.edit_text(f"✅ Заявка #{deposit_id} подтверждена")
     await cb.answer()
 
@@ -802,13 +811,17 @@ async def reject_usdt(cb: types.CallbackQuery):
     dep = c.fetchone()
     
     if not dep or dep[5] != 'pending':
-        await cb.answer("❌ Уже обработана", show_alert=True)
+        await cb.answer("❌ Заявка уже обработана", show_alert=True)
         return
     
     c.execute("UPDATE deposits SET status = 'rejected' WHERE id = ?", (deposit_id,))
     conn.commit()
     
-    await bot.send_message(dep[1], f"❌ ОБМЕН {dep[2].upper()} ОТКЛОНЁН\n\nПоддержка: {SUPPORT_LINK}")
+    await bot.send_message(
+        dep[1],
+        f"❌ Обмен {dep[2].upper()} отклонён\n\nПоддержка: {SUPPORT_LINK}"
+    )
+    
     await cb.message.edit_text(f"❌ Заявка #{deposit_id} отклонена")
     await cb.answer()
 
@@ -820,10 +833,14 @@ async def withdraw_menu(cb: types.CallbackQuery, state: FSMContext):
     max_wd = get_max_withdrawal()
     
     if bal < min_wd:
-        await edit_or_send(cb, f"❌ Мин. вывод: {min_wd:.0f} ₽", back_kb())
+        await edit_or_send(cb, f"❌ Минимальная сумма вывода: {min_wd:.0f} ₽", back_kb())
         return
     await edit_or_send(cb,
-        f"💸 Вывод\n\n💰 Баланс: {bal:.2f} ₽\n📊 {min_wd:.0f}-{max_wd:.0f} ₽\n\nВведите сумму:",
+        f"💸 Вывод рублей\n\n"
+        f"💰 Ваш баланс: {bal:.2f} ₽\n"
+        f"📊 Мин. сумма: {min_wd:.0f} ₽\n"
+        f"📊 Макс. сумма: {max_wd:.0f} ₽\n\n"
+        "Введите сумму в рублях:",
         cancel_kb())
     await state.set_state(Withdraw.amount)
 
@@ -835,28 +852,28 @@ async def withdraw_amount(m: types.Message, state: FSMContext):
         max_wd = get_max_withdrawal()
         
         if amount < min_wd:
-            await m.answer(f"❌ Мин. {min_wd:.0f} ₽", reply_markup=cancel_kb())
+            await m.answer(f"❌ Минимальная сумма: {min_wd:.0f} ₽", reply_markup=cancel_kb())
             return
         if amount > max_wd:
-            await m.answer(f"❌ Макс. {max_wd:.0f} ₽", reply_markup=cancel_kb())
+            await m.answer(f"❌ Максимальная сумма: {max_wd:.0f} ₽", reply_markup=cancel_kb())
             return
         bal = get_balance(m.from_user.id)
         if amount > bal:
-            await m.answer(f"❌ Недостаточно", reply_markup=cancel_kb())
+            await m.answer(f"❌ Недостаточно средств. Баланс: {bal:.2f} ₽", reply_markup=cancel_kb())
             return
     except:
-        await m.answer("❌ Введите число", reply_markup=cancel_kb())
+        await m.answer("❌ Введите положительное число", reply_markup=cancel_kb())
         return
     
     await state.update_data(amount=amount)
-    await m.answer("Введите реквизиты:", reply_markup=cancel_kb())
+    await m.answer("Введите реквизиты для выплаты (карта/счет/телефон):", reply_markup=cancel_kb())
     await state.set_state(Withdraw.details)
 
 @dp.message(Withdraw.details)
 async def withdraw_details(m: types.Message, state: FSMContext):
     details = m.text.strip()
     if len(details) < 5:
-        await m.answer("❌ Слишком коротко", reply_markup=cancel_kb())
+        await m.answer("❌ Введите корректные реквизиты", reply_markup=cancel_kb())
         return
     
     data = await state.get_data()
@@ -864,7 +881,10 @@ async def withdraw_details(m: types.Message, state: FSMContext):
     update_balance(m.from_user.id, -amount)
     wid = add_withdrawal(m.from_user.id, amount, details)
     await m.answer(
-        f"✅ Заявка #{wid} создана\n💰 {amount:.2f} ₽",
+        f"✅ Заявка на вывод создана\n\n"
+        f"📋 Номер заявки: #{wid}\n"
+        f"💰 Сумма: {amount:.2f} ₽\n\n"
+        "⏱ Ожидайте подтверждения администратора",
         reply_markup=back_kb()
     )
     await state.clear()
@@ -878,62 +898,72 @@ async def referrals_cb(cb: types.CallbackQuery, state: FSMContext):
     invited = c.fetchone()[0]
     c.execute("SELECT ref_bonus FROM users WHERE user_id = ?", (cb.from_user.id,))
     bonus = c.fetchone()[0] or 0
+    ref_percent = get_referral_percent()
     await edit_or_send(cb,
-        f"👥 Рефералы\n\n🔗 {link}\n👤 {invited}\n🎁 {bonus:.2f} ₽",
+        f"👥 Реферальная программа\n\n"
+        f"🔗 Ваша ссылка:\n{link}\n\n"
+        f"👤 Приглашено: {invited} чел\n"
+        f"🎁 Заработано бонусов: {bonus:.2f} ₽\n\n"
+        f"💡 Вы получаете {ref_percent}% от обменов рефералов",
         back_kb())
 
 # ============= ИСТОРИЯ =============
 @dp.callback_query(F.data == "history")
 async def history_cb(cb: types.CallbackQuery, state: FSMContext):
-    c.execute("SELECT crypto, amount, status, created_at FROM deposits WHERE user_id = ? ORDER BY created_at DESC LIMIT 5", (cb.from_user.id,))
+    c.execute("SELECT crypto, amount, status, created_at FROM deposits WHERE user_id = ? ORDER BY created_at DESC LIMIT 10", (cb.from_user.id,))
     dep = c.fetchall()
-    c.execute("SELECT amount, status, created_at FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC LIMIT 5", (cb.from_user.id,))
+    c.execute("SELECT amount, status, created_at FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC LIMIT 10", (cb.from_user.id,))
     wd = c.fetchall()
     
-    text = "📜 История\n\n"
+    text = "📜 История операций\n\n"
     if dep:
         text += "🔄 Обмены:\n"
         for d in dep:
-            date = time.strftime("%d.%m %H:%M", time.localtime(d[3]))
-            text += f"• {d[0].upper()} {d[1]:.2f} - {d[2]} ({date})\n"
+            date = time.strftime("%d.%m.%Y %H:%M", time.localtime(d[3]))
+            text += f"• {d[0].upper()} {d[1]:.4f} - {d[2]} ({date})\n"
     if wd:
         text += "\n💸 Выводы:\n"
         for w in wd:
-            date = time.strftime("%d.%m %H:%M", time.localtime(w[2]))
+            date = time.strftime("%d.%m.%Y %H:%M", time.localtime(w[2]))
             text += f"• {w[0]:.2f} ₽ - {w[1]} ({date})\n"
     if not dep and not wd:
-        text += "📭 Пусто"
+        text += "📭 Операций пока нет"
     await edit_or_send(cb, text, back_kb())
 
-# ============= АДМИНКА =============
+# ============= АДМИНКА (ПОЛНАЯ) =============
 @dp.message(Command("admin"))
 async def admin_cmd(m: types.Message):
     if m.from_user.id not in ADMIN_IDS:
         await m.answer("⛔ Нет доступа")
         return
-    await m.answer("🛡 Админ панель", reply_markup=admin_kb())
+    await m.answer("🛡 Панель администратора", reply_markup=admin_kb())
 
 @dp.callback_query(F.data == "admin_back")
 async def admin_back(cb: types.CallbackQuery):
-    await edit_or_send(cb, "🛡 Админ панель", admin_kb())
+    await edit_or_send(cb, "🛡 Панель администратора", admin_kb())
 
 @dp.callback_query(F.data == "admin_exit")
 async def admin_exit(cb: types.CallbackQuery):
     await back_cb(cb, None)
 
+# Заявки на вывод
 @dp.callback_query(F.data == "admin_requests")
 async def admin_requests(cb: types.CallbackQuery):
-    c.execute("SELECT id, user_id, amount, details, status FROM withdrawals WHERE status = 'pending'")
+    c.execute("SELECT id, user_id, amount, details, status FROM withdrawals WHERE status = 'pending' ORDER BY created_at DESC")
     rows = c.fetchall()
     if not rows:
-        await edit_or_send(cb, "📭 Нет заявок", admin_kb())
+        await edit_or_send(cb, "📭 Нет новых заявок", admin_kb())
         return
     for w in rows:
         await cb.message.answer(
-            f"📋 #{w[0]}\n👤 {w[1]}\n💰 {w[2]:.2f} ₽\n📝 {w[3]}",
+            f"📋 Заявка #{w[0]}\n"
+            f"👤 Пользователь: {w[1]}\n"
+            f"💰 Сумма: {w[2]:.2f} ₽\n"
+            f"📝 Реквизиты: {w[3]}\n"
+            f"🏷 Статус: {w[4]}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅", callback_data=f"approve_{w[0]}"),
-                 InlineKeyboardButton(text="❌", callback_data=f"reject_{w[0]}")]
+                [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"approve_{w[0]}"),
+                 InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{w[0]}")]
             ])
         )
     await cb.answer()
@@ -948,7 +978,7 @@ async def approve_req(cb: types.CallbackQuery):
     if w:
         update_withdrawal_status(wid, 'completed')
         await bot.send_message(w[1], f"✅ Вывод #{wid} выполнен")
-        await cb.message.edit_text(f"✅ #{wid} подтверждена")
+        await cb.message.edit_text(f"✅ Заявка #{wid} подтверждена")
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("reject_"))
@@ -958,7 +988,7 @@ async def reject_start(cb: types.CallbackQuery, state: FSMContext):
         return
     wid = int(cb.data.split("_")[1])
     await state.update_data(wid=wid)
-    await edit_or_send(cb, "❌ Причина:", admin_kb())
+    await edit_or_send(cb, "❌ Причина отклонения:", admin_kb())
     await state.set_state(AdminReject.comment)
 
 @dp.message(AdminReject.comment)
@@ -970,19 +1000,40 @@ async def reject_comment(m: types.Message, state: FSMContext):
         update_withdrawal_status(wid, 'rejected', m.text)
         update_balance(w[1], w[2])
         await bot.send_message(w[1], f"❌ Вывод #{wid} отклонён\nПричина: {m.text}")
-        await m.answer(f"✅ #{wid} отклонена", reply_markup=admin_kb())
+        await m.answer(f"✅ Заявка #{wid} отклонена, средства возвращены", reply_markup=admin_kb())
+    else:
+        await m.answer("❌ Заявка не найдена", reply_markup=admin_kb())
     await state.clear()
 
+# Статистика
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(cb: types.CallbackQuery):
     users, deposits, withdrawals = get_statistics()
-    await edit_or_send(cb, f"📊 Статистика\n\n👥 {users}\n💰 {deposits:.0f} ₽\n💸 {withdrawals:.0f} ₽", admin_kb())
+    c.execute("SELECT SUM(amount) FROM referral_earnings")
+    ref_bonus = c.fetchone()[0] or 0
+    c.execute("SELECT COUNT(*) FROM users WHERE ref_by > 0")
+    referred = c.fetchone()[0]
+    await edit_or_send(cb,
+        f"📊 Статистика\n\n"
+        f"👥 Пользователей: {users}\n"
+        f"👥 Приглашённых: {referred}\n"
+        f"💰 Депозитов: {deposits:.2f} ₽\n"
+        f"💸 Выводов: {withdrawals:.2f} ₽\n"
+        f"💵 В обороте: {deposits - withdrawals:.2f} ₽\n"
+        f"🎁 Реферальных бонусов: {ref_bonus:.2f} ₽",
+        admin_kb())
 
+# Лимиты вывода
 @dp.callback_query(F.data == "admin_limits")
 async def admin_limits_menu(cb: types.CallbackQuery, state: FSMContext):
     min_wd = get_min_withdrawal()
     max_wd = get_max_withdrawal()
-    await edit_or_send(cb, f"💵 Лимиты\n\nМин: {min_wd:.0f} ₽\nМакс: {max_wd:.0f} ₽\n\nВведите новый мин. лимит:", admin_kb())
+    await edit_or_send(cb,
+        f"💵 Лимиты вывода\n\n"
+        f"📊 Мин. сумма: {min_wd:.0f} ₽\n"
+        f"📊 Макс. сумма: {max_wd:.0f} ₽\n\n"
+        f"Введите новый минимальный лимит:",
+        admin_kb())
     await state.set_state(AdminLimits.min_limit)
 
 @dp.message(AdminLimits.min_limit)
@@ -992,10 +1043,10 @@ async def admin_limits_min(m: types.Message, state: FSMContext):
         if min_val <= 0:
             raise ValueError
         await state.update_data(min_limit=min_val)
-        await m.answer(f"✅ Мин: {min_val:.0f} ₽\n\nВведите макс. лимит:", reply_markup=admin_kb())
+        await m.answer(f"✅ Мин. лимит: {min_val:.0f} ₽\n\nВведите максимальный лимит:", reply_markup=admin_kb())
         await state.set_state(AdminLimits.max_limit)
     except:
-        await m.answer("❌ Ошибка", reply_markup=admin_kb())
+        await m.answer("❌ Введите положительное число", reply_markup=admin_kb())
         await state.clear()
 
 @dp.message(AdminLimits.max_limit)
@@ -1006,17 +1057,213 @@ async def admin_limits_max(m: types.Message, state: FSMContext):
         min_val = data.get('min_limit', 1000)
         
         if max_val <= min_val:
-            await m.answer(f"❌ Макс > {min_val:.0f}", reply_markup=admin_kb())
+            await m.answer(f"❌ Макс. лимит должен быть больше {min_val:.0f}", reply_markup=admin_kb())
             await state.clear()
             return
         
         set_min_withdrawal(min_val)
         set_max_withdrawal(max_val)
-        await m.answer(f"✅ Лимиты: {min_val:.0f}-{max_val:.0f} ₽", reply_markup=admin_kb())
+        await m.answer(f"✅ Лимиты обновлены!\nМин: {min_val:.0f} ₽\nМакс: {max_val:.0f} ₽", reply_markup=admin_kb())
         await state.clear()
     except:
-        await m.answer("❌ Ошибка", reply_markup=admin_kb())
+        await m.answer("❌ Введите число", reply_markup=admin_kb())
         await state.clear()
+
+# Курсы
+@dp.callback_query(F.data == "admin_rates")
+async def admin_rates_menu(cb: types.CallbackQuery):
+    await edit_or_send(cb, "🔧 Управление курсами\n\nВыберите валюту:", InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 TON", callback_data="rate_ton")],
+        [InlineKeyboardButton(text="💵 USDT", callback_data="rate_usdt")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_back")]
+    ]))
+
+@dp.callback_query(F.data.startswith("rate_"))
+async def admin_rate_select(cb: types.CallbackQuery, state: FSMContext):
+    crypto = cb.data.split("_")[1]
+    if crypto == 'usdt':
+        crypto = 'usdt'
+    await state.update_data(crypto=crypto)
+    current = get_exchange_rate(crypto)
+    await edit_or_send(cb, f"🔧 Изменение курса {crypto.upper()}\n\nТекущий курс: {current:.2f} ₽\nВведите новый курс:", admin_kb())
+    await state.set_state(AdminRate.rate)
+
+@dp.message(AdminRate.rate)
+async def admin_rate_set(m: types.Message, state: FSMContext):
+    try:
+        rate = float(m.text)
+        if rate <= 0:
+            raise ValueError
+    except:
+        await m.answer("❌ Введите положительное число")
+        return
+    data = await state.get_data()
+    set_exchange_rate(data['crypto'], rate)
+    await m.answer(f"✅ Курс {data['crypto'].upper()} = {rate:.2f} ₽", reply_markup=admin_kb())
+    await state.clear()
+
+# Кошельки
+@dp.callback_query(F.data == "admin_wallets")
+async def admin_wallets_menu(cb: types.CallbackQuery):
+    text = "💰 Управление кошельками\n\n"
+    for crypto, wallet in WALLETS.items():
+        name = crypto.upper().replace('_', ' ')
+        text += f"• {name}: {wallet[:20]}...\n"
+    await edit_or_send(cb, text, InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 TON", callback_data="wallet_ton")],
+        [InlineKeyboardButton(text="💰 USDT TON", callback_data="wallet_usdt_ton")],
+        [InlineKeyboardButton(text="💵 USDT TRC20", callback_data="wallet_usdt_trc20")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_back")]
+    ]))
+
+@dp.callback_query(F.data.startswith("wallet_"))
+async def admin_wallet_select(cb: types.CallbackQuery, state: FSMContext):
+    if cb.data == "wallet_ton":
+        crypto = "ton"
+    elif cb.data == "wallet_usdt_ton":
+        crypto = "usdt_ton"
+    elif cb.data == "wallet_usdt_trc20":
+        crypto = "usdt_trc20"
+    else:
+        await cb.answer("❌ Ошибка", show_alert=True)
+        return
+    
+    await state.update_data(crypto=crypto)
+    current = WALLETS[crypto]
+    name = crypto.upper().replace('_', ' ')
+    await edit_or_send(cb, f"🔧 Изменение кошелька {name}\n\nТекущий адрес:\n{current}\n\nВведите новый адрес:", admin_kb())
+    await state.set_state(AdminWallet.address)
+
+@dp.message(AdminWallet.address)
+async def admin_wallet_set(m: types.Message, state: FSMContext):
+    address = m.text.strip()
+    if len(address) < 20:
+        await m.answer("❌ Адрес слишком короткий")
+        return
+    data = await state.get_data()
+    WALLETS[data['crypto']] = address
+    name = data['crypto'].upper().replace('_', ' ')
+    await m.answer(f"✅ Кошелёк {name} обновлён", reply_markup=admin_kb())
+    await state.clear()
+
+# Комиссия
+@dp.callback_query(F.data == "admin_commission")
+async def admin_commission_menu(cb: types.CallbackQuery, state: FSMContext):
+    current = get_commission()
+    await edit_or_send(cb, f"⚙️ Комиссия сервиса\n\nТекущая комиссия: {current}%\nВведите новое значение (0-100):", admin_kb())
+    await state.set_state(AdminCommission.percent)
+
+@dp.message(AdminCommission.percent)
+async def admin_commission_set(m: types.Message, state: FSMContext):
+    try:
+        p = float(m.text)
+        if 0 <= p <= 100:
+            set_commission(p)
+            await m.answer(f"✅ Комиссия установлена: {p}%", reply_markup=admin_kb())
+        else:
+            await m.answer("❌ Введите число от 0 до 100")
+    except:
+        await m.answer("❌ Введите число")
+    await state.clear()
+
+# Реферальный процент
+@dp.callback_query(F.data == "admin_referral")
+async def admin_referral_menu(cb: types.CallbackQuery, state: FSMContext):
+    current = get_referral_percent()
+    await edit_or_send(cb, f"🎁 Реферальный процент\n\nТекущий процент: {current}%\nВведите новое значение (0-50):", admin_kb())
+    await state.set_state(AdminReferral.percent)
+
+@dp.message(AdminReferral.percent)
+async def admin_referral_set(m: types.Message, state: FSMContext):
+    try:
+        p = float(m.text)
+        if 0 <= p <= 50:
+            set_referral_percent(p)
+            await m.answer(f"✅ Реферальный процент установлен: {p}%", reply_markup=admin_kb())
+        else:
+            await m.answer("❌ Введите число от 0 до 50")
+    except:
+        await m.answer("❌ Введите число")
+    await state.clear()
+
+# Изменение баланса
+@dp.callback_query(F.data == "admin_balance")
+async def admin_balance_start(cb: types.CallbackQuery, state: FSMContext):
+    await edit_or_send(cb, "👤 Ручное изменение баланса\n\nВведите Telegram ID пользователя:", admin_kb())
+    await state.set_state(AdminBalance.uid)
+
+@dp.message(AdminBalance.uid)
+async def admin_balance_uid(m: types.Message, state: FSMContext):
+    try:
+        uid = int(m.text)
+    except:
+        await m.answer("❌ ID должен быть числом")
+        return
+    user = get_user(uid)
+    if not user:
+        await m.answer(f"❌ Пользователь с ID {uid} не найден")
+        return
+    await state.update_data(uid=uid, username=user[2])
+    await m.answer(f"👤 Пользователь: {user[2]} (ID: {uid})\n💰 Текущий баланс: {user[3]:.2f} ₽\n\nВведите сумму изменения (+ или -):")
+    await state.set_state(AdminBalance.amount)
+
+@dp.message(AdminBalance.amount)
+async def admin_balance_amount(m: types.Message, state: FSMContext):
+    try:
+        amt = float(m.text)
+    except:
+        await m.answer("❌ Введите число")
+        return
+    data = await state.get_data()
+    update_balance(data['uid'], amt)
+    new_bal = get_balance(data['uid'])
+    await bot.send_message(data['uid'], f"👤 Изменение баланса\n\n💰 Сумма: {amt:+.2f} ₽\n💵 Новый баланс: {new_bal:.2f} ₽")
+    await m.answer(f"✅ Баланс пользователя {data['username']} изменён на {amt:+.2f} ₽\n💰 Новый баланс: {new_bal:.2f} ₽", reply_markup=admin_kb())
+    await state.clear()
+
+# Блокировка
+@dp.callback_query(F.data == "admin_ban")
+async def admin_ban_start(cb: types.CallbackQuery, state: FSMContext):
+    await edit_or_send(cb, "🚫 Блокировка пользователя\n\nВведите Telegram ID пользователя:", admin_kb())
+    await state.set_state(AdminBan.uid)
+
+@dp.message(AdminBan.uid)
+async def admin_ban_uid(m: types.Message, state: FSMContext):
+    try:
+        uid = int(m.text)
+    except:
+        await m.answer("❌ ID должен быть числом")
+        return
+    user = get_user(uid)
+    if not user:
+        await m.answer(f"❌ Пользователь с ID {uid} не найден")
+        return
+    c.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (uid,))
+    conn.commit()
+    await bot.send_message(uid, f"🚫 Ваш аккаунт заблокирован\n\nСвяжитесь с поддержкой: {SUPPORT_LINK}")
+    await m.answer(f"✅ Пользователь {user[2]} (ID: {uid}) заблокирован", reply_markup=admin_kb())
+    await state.clear()
+
+# Рассылка
+@dp.callback_query(F.data == "admin_mailing")
+async def admin_mailing(cb: types.CallbackQuery, state: FSMContext):
+    await edit_or_send(cb, "📢 Рассылка\n\nВведите текст сообщения:", admin_kb())
+    await state.set_state(AdminMailing.text)
+
+@dp.message(AdminMailing.text)
+async def mailing_send(m: types.Message, state: FSMContext):
+    text = m.text
+    users = get_all_users()
+    success = 0
+    for uid in users:
+        try:
+            await bot.send_message(uid, text)
+            success += 1
+            await asyncio.sleep(0.05)
+        except:
+            pass
+    await m.answer(f"✅ Рассылка завершена!\nОтправлено: {success}/{len(users)}", reply_markup=admin_kb())
+    await state.clear()
 
 # ============= ЗАПУСК =============
 app = Flask(__name__)
