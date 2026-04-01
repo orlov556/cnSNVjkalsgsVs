@@ -44,6 +44,9 @@ def escape_markdown(text):
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', str(text))
 
+def clean_text(text):
+    return re.sub(r'[_*[\]()~`>#+\-=|{}.!]', lambda m: '\\' + m.group(0), text)
+
 conn = sqlite3.connect("exchange.db", check_same_thread=False)
 c = conn.cursor()
 
@@ -540,7 +543,11 @@ async def welcome(target, user_id, username, ref_by=None):
 async def edit_or_send(cb, text, markup=None):
     try:
         await cb.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
-    except:
+    except Exception as e:
+        try:
+            await cb.message.delete()
+        except:
+            pass
         await cb.message.answer(text, parse_mode="Markdown", reply_markup=markup)
     await cb.answer()
 
@@ -673,8 +680,8 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
     address = WALLETS[crypto]
     deposit_id = add_deposit(user_id, crypto, memo, amount)
     
-    safe_address = escape_markdown(address)
-    safe_memo = escape_markdown(memo)
+    safe_address = clean_text(address)
+    safe_memo = clean_text(memo)
     commission = get_commission()
     
     if crypto in ('usdt_ton', 'usdt_trc20'):
@@ -720,7 +727,11 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
     
     try:
         await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
-    except:
+    except Exception as e:
+        try:
+            await callback.message.delete()
+        except:
+            pass
         await callback.message.answer(text, parse_mode="Markdown", reply_markup=kb)
     
     await state.clear()
@@ -772,7 +783,10 @@ async def check_ton_manual(callback: types.CallbackQuery):
             parse_mode="Markdown"
         )
         
-        await callback.message.edit_text("✅ Транзакция найдена! Средства зачислены.")
+        try:
+            await callback.message.edit_text("✅ Транзакция найдена! Средства зачислены.")
+        except:
+            await callback.message.answer("✅ Транзакция найдена! Средства зачислены.")
     else:
         await callback.answer("❌ Транзакция не найдена. Проверьте правильность memo и попробуйте позже.", show_alert=True)
 
@@ -808,9 +822,9 @@ async def check_usdt(callback: types.CallbackQuery):
             f"👤 Пользователь: `{dep[1]}`\n"
             f"💎 Валюта: {dep[2].upper()}\n"
             f"📊 Сумма: {dep[4]:.4f} {dep[2].upper()}\n"
-            f"📝 Memo: `{escape_markdown(dep[3])}`\n"
+            f"📝 Memo: `{clean_text(dep[3])}`\n"
             f"💰 К получению: {net:.2f} ₽\n\n"
-            f"💰 Кошелёк для проверки: `{escape_markdown(WALLETS[dep[2]])}`\n\n"
+            f"💰 Кошелёк для проверки: `{clean_text(WALLETS[dep[2]])}`\n\n"
             f"Проверьте транзакцию и подтвердите.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -819,19 +833,20 @@ async def check_usdt(callback: types.CallbackQuery):
             ])
         )
     
+    text = f"🔄 *Обмен {dep[2].upper()}*\n\n✅ Запрос на проверку отправлен администратору.\nПожалуйста, ожидайте подтверждения.\n\nСтатус заявки: ожидает проверки."
+    
     try:
-        await callback.message.edit_text(
-            f"🔄 *Обмен {dep[2].upper()}*\n\n"
-            f"✅ Запрос на проверку отправлен администратору.\n"
-            f"Пожалуйста, ожидайте подтверждения.\n\n"
-            f"Статус заявки: ожидает проверки.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]
-            ])
-        )
+        await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]
+        ]))
     except:
-        pass
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await callback.message.answer(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]
+        ]))
     
     await callback.answer("✅ Запрос отправлен администратору. Ожидайте подтверждения.", show_alert=True)
 
@@ -993,7 +1008,7 @@ async def referrals_cb(callback: types.CallbackQuery, state: FSMContext):
     ref_percent = get_referral_percent()
     await edit_or_send(callback,
         f"👥 *Реферальная программа*\n\n"
-        f"🔗 Ваша реферальная ссылка:\n`{escape_markdown(link)}`\n\n"
+        f"🔗 Ваша реферальная ссылка:\n`{clean_text(link)}`\n\n"
         f"👤 Приглашено: *{invited}* чел\n"
         f"🎁 Заработано бонусов: *{bonus:.2f} ₽*\n\n"
         f"💡 Вы получаете *{ref_percent}%* от суммы обменов ваших рефералов (после вычета комиссии)\n"
@@ -1053,7 +1068,7 @@ async def admin_requests(callback: types.CallbackQuery):
             f"📋 *Заявка #{w[0]}*\n"
             f"👤 Пользователь: `{w[1]}`\n"
             f"💰 Сумма: {w[2]:.2f} ₽\n"
-            f"📝 Реквизиты: `{escape_markdown(w[3])}`\n"
+            f"📝 Реквизиты: `{clean_text(w[3])}`\n"
             f"🏷 Статус: {w[4]}",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1094,7 +1109,7 @@ async def reject_comment(message: types.Message, state: FSMContext):
     if w:
         update_withdrawal_status(wid, 'rejected', message.text)
         update_balance(w[1], w[2])
-        await bot.send_message(w[1], f"❌ *Вывод #{wid} отклонён*\nПричина: {escape_markdown(message.text)}", parse_mode="Markdown")
+        await bot.send_message(w[1], f"❌ *Вывод #{wid} отклонён*\nПричина: {clean_text(message.text)}", parse_mode="Markdown")
         await message.answer(f"✅ Заявка #{wid} отклонена, средства возвращены.", reply_markup=admin_kb())
     else:
         await message.answer("❌ Заявка не найдена.", reply_markup=admin_kb())
@@ -1222,7 +1237,7 @@ async def admin_wallet_select(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(crypto=crypto)
     current = WALLETS[crypto]
     name = crypto.upper().replace('_', ' ')
-    await edit_or_send(callback, f"🔧 *Изменение кошелька {name}*\n\nТекущий адрес:\n`{escape_markdown(current)}`\n\nВведите новый адрес:", admin_kb())
+    await edit_or_send(callback, f"🔧 *Изменение кошелька {name}*\n\nТекущий адрес:\n`{clean_text(current)}`\n\nВведите новый адрес:", admin_kb())
     await state.set_state(AdminWallet.address)
 
 @dp.message(AdminWallet.address)
