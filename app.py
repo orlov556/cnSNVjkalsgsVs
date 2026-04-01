@@ -405,25 +405,6 @@ def can_make_usdt_request(user_id):
     user_usdt_requests[user_id].append(now)
     return True
 
-def check_ban_decorator(func):
-    async def wrapper(event, *args, **kwargs):
-        user_id = None
-        if isinstance(event, types.Message):
-            user_id = event.from_user.id
-        elif isinstance(event, types.CallbackQuery):
-            user_id = event.from_user.id
-        
-        if user_id:
-            user = get_user(user_id)
-            if user and user[6]:
-                if isinstance(event, types.Message):
-                    await event.answer("⛔ Ваш аккаунт заблокирован. Обратитесь к администратору.")
-                else:
-                    await event.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
-                return
-        return await func(event, *args, **kwargs)
-    return wrapper
-
 def main_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Баланс", callback_data="balance")],
@@ -564,16 +545,22 @@ async def edit_or_send(cb, text, markup=None):
     await cb.answer()
 
 @dp.message(Command("start"))
-@check_ban_decorator
 async def start_cmd(message: types.Message, state: FSMContext):
+    user = get_user(message.from_user.id)
+    if user and user[6]:
+        await message.answer("⛔ Ваш аккаунт заблокирован.")
+        return
     await state.clear()
     args = message.text.split()
     ref = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     await welcome(message, message.from_user.id, message.from_user.username, ref)
 
 @dp.callback_query(F.data == "back")
-@check_ban_decorator
 async def back_cb(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
     await state.clear()
     await welcome(callback, callback.from_user.id, callback.from_user.username)
     try:
@@ -582,15 +569,21 @@ async def back_cb(callback: types.CallbackQuery, state: FSMContext):
         pass
 
 @dp.callback_query(F.data == "balance")
-@check_ban_decorator
 async def balance_cb(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
     await state.clear()
     bal = get_balance(callback.from_user.id)
     await edit_or_send(callback, f"💰 *Ваш баланс*\n\n{bal:.2f} ₽\n\nЗдесь отображаются рубли, полученные за обмен криптовалюты.", back_kb())
 
 @dp.callback_query(F.data == "exchange")
-@check_ban_decorator
 async def exchange_menu(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
     await state.clear()
     await edit_or_send(callback, 
         "🔄 *Обмен криптовалюты на рубли*\n\n"
@@ -601,8 +594,12 @@ async def exchange_menu(callback: types.CallbackQuery, state: FSMContext):
         exchange_kb())
 
 @dp.callback_query(F.data.startswith("exch_"))
-@check_ban_decorator
 async def exch_select(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
+    
     crypto = callback.data[5:]
     
     if crypto not in WALLETS:
@@ -622,8 +619,12 @@ async def exch_select(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Exchange.amount)
 
 @dp.message(Exchange.amount)
-@check_ban_decorator
 async def exch_amount(message: types.Message, state: FSMContext):
+    user = get_user(message.from_user.id)
+    if user and user[6]:
+        await message.answer("⛔ Ваш аккаунт заблокирован.")
+        return
+    
     try:
         amount = float(message.text)
         if amount < MIN_EXCHANGE:
@@ -653,8 +654,12 @@ async def exch_amount(message: types.Message, state: FSMContext):
         reply_markup=confirm_kb())
 
 @dp.callback_query(F.data == "confirm")
-@check_ban_decorator
 async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
+    
     data = await state.get_data()
     if not data:
         await back_cb(callback, state)
@@ -722,8 +727,12 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("check_ton_"))
-@check_ban_decorator
 async def check_ton_manual(callback: types.CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
+    
     deposit_id = int(callback.data.split("_")[2])
     
     c.execute("SELECT id, user_id, crypto, memo, amount, status FROM deposits WHERE id = ?", (deposit_id,))
@@ -768,8 +777,12 @@ async def check_ton_manual(callback: types.CallbackQuery):
         await callback.answer("❌ Транзакция не найдена. Проверьте правильность memo и попробуйте позже.", show_alert=True)
 
 @dp.callback_query(F.data.startswith("check_usdt_"))
-@check_ban_decorator
 async def check_usdt(callback: types.CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
+    
     deposit_id = int(callback.data.split("_")[2])
     c.execute("SELECT id, user_id, crypto, memo, amount, status FROM deposits WHERE id = ?", (deposit_id,))
     dep = c.fetchone()
@@ -884,8 +897,12 @@ async def reject_usdt(callback: types.CallbackQuery):
     await callback.answer()
 
 @dp.callback_query(F.data == "withdraw")
-@check_ban_decorator
 async def withdraw_menu(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
+    
     bal = get_balance(callback.from_user.id)
     min_wd = get_min_withdrawal()
     max_wd = get_max_withdrawal()
@@ -903,8 +920,12 @@ async def withdraw_menu(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Withdraw.amount)
 
 @dp.message(Withdraw.amount)
-@check_ban_decorator
 async def withdraw_amount(message: types.Message, state: FSMContext):
+    user = get_user(message.from_user.id)
+    if user and user[6]:
+        await message.answer("⛔ Ваш аккаунт заблокирован.")
+        return
+    
     try:
         amount = float(message.text)
         min_wd = get_min_withdrawal()
@@ -929,8 +950,12 @@ async def withdraw_amount(message: types.Message, state: FSMContext):
     await state.set_state(Withdraw.details)
 
 @dp.message(Withdraw.details)
-@check_ban_decorator
 async def withdraw_details(message: types.Message, state: FSMContext):
+    user = get_user(message.from_user.id)
+    if user and user[6]:
+        await message.answer("⛔ Ваш аккаунт заблокирован.")
+        return
+    
     details = message.text.strip()
     if len(details) < 5:
         await message.answer("❌ Введите корректные реквизиты (минимум 5 символов)", reply_markup=cancel_kb())
@@ -952,8 +977,12 @@ async def withdraw_details(message: types.Message, state: FSMContext):
     await state.clear()
 
 @dp.callback_query(F.data == "referrals")
-@check_ban_decorator
 async def referrals_cb(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
+    
     me = await bot.get_me()
     bot_username = me.username if me.username else "CryptoExchanges_robot"
     link = f"https://t.me/{bot_username}?start={callback.from_user.id}"
@@ -972,8 +1001,12 @@ async def referrals_cb(callback: types.CallbackQuery, state: FSMContext):
         back_kb())
 
 @dp.callback_query(F.data == "history")
-@check_ban_decorator
 async def history_cb(callback: types.CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if user and user[6]:
+        await callback.answer("⛔ Ваш аккаунт заблокирован.", show_alert=True)
+        return
+    
     c.execute("SELECT crypto, amount, status, created_at FROM deposits WHERE user_id = ? ORDER BY created_at DESC LIMIT 10", (callback.from_user.id,))
     dep = c.fetchall()
     c.execute("SELECT amount, status, created_at FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC LIMIT 10", (callback.from_user.id,))
@@ -1341,6 +1374,7 @@ def health():
     return "OK"
 
 async def main():
+    await asyncio.sleep(1)
     asyncio.create_task(update_rates_loop())
     asyncio.create_task(check_deposits_loop(bot))
     await dp.start_polling(bot)
@@ -1350,7 +1384,8 @@ if __name__ == "__main__":
     if is_railway:
         def run_bot():
             asyncio.run(main())
-        threading.Thread(target=run_bot, daemon=True).start()
+        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot_thread.start()
         port = int(os.environ.get("PORT", 5000))
         app.run(host="0.0.0.0", port=port)
     else:
