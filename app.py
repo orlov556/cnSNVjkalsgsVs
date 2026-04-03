@@ -40,22 +40,30 @@ MIN_EXCHANGE = 1.0
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def escape_markdown(text):
-    """Экранирует специальные символы Markdown для обычного текста"""
+def escape_markdown_v2(text):
+    """Экранирование для MarkdownV2"""
     if not text:
         return text
-    escape_chars = r'*[]()~`>#+-=|{}.!'
-    result = ''
-    for char in text:
-        if char in escape_chars:
-            result += '\\' + char
-        else:
-            result += char
-    return result
+    special_chars = r'_*[]()~`>#+-=|{}.!'
+    for char in special_chars:
+        text = text.replace(char, '\\' + char)
+    return text
+
+def escape_markdown(text):
+    """Экранирование для обычного Markdown"""
+    if not text:
+        return text
+    # Экранируем только критичные символы
+    special_chars = r'*_`[]()~>#+-=|{}.!'
+    for char in special_chars:
+        text = text.replace(char, '\\' + char)
+    return text
 
 def clean_text(text):
-    """Для обратной совместимости"""
-    return escape_markdown(text)
+    """Очистка текста для безопасного отображения"""
+    if not text:
+        return text
+    return escape_markdown(str(text))
 
 conn = sqlite3.connect("exchange.db", check_same_thread=False)
 c = conn.cursor()
@@ -506,7 +514,18 @@ class AdminLimits(StatesGroup):
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
+async def send_safe_message(target, text, reply_markup=None):
+    """Безопасная отправка сообщения без Markdown"""
+    try:
+        if hasattr(target, 'message'):
+            await target.message.answer(text, reply_markup=reply_markup)
+        else:
+            await target.answer(text, reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Send error: {e}")
+
 async def edit_message_safe(callback: types.CallbackQuery, text, markup=None):
+    """Безопасное редактирование сообщения - без Markdown при ошибке"""
     try:
         if callback.message and callback.message.text:
             await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
@@ -520,18 +539,31 @@ async def edit_message_safe(callback: types.CallbackQuery, text, markup=None):
         error_text = str(e).lower()
         if "message is not modified" in error_text:
             pass
+        elif "can't parse entities" in error_text:
+            # Если ошибка в Markdown, отправляем без форматирования
+            logger.warning(f"Markdown error, sending without formatting: {e}")
+            try:
+                if callback.message and callback.message.text:
+                    await callback.message.edit_text(text, reply_markup=markup)
+                else:
+                    await callback.message.answer(text, reply_markup=markup)
+            except:
+                pass
         elif "message can't be edited" in error_text or "message to edit not found" in error_text:
             try:
                 await callback.message.delete()
             except:
                 pass
-            await callback.message.answer(text, parse_mode="Markdown", reply_markup=markup)
-        else:
-            logger.error(f"Edit error: {e}")
             try:
                 await callback.message.answer(text, parse_mode="Markdown", reply_markup=markup)
             except:
                 await callback.message.answer(text, reply_markup=markup)
+        else:
+            logger.error(f"Edit error: {e}")
+            try:
+                await callback.message.answer(text, reply_markup=markup)
+            except:
+                pass
 
 async def welcome(target, user_id, username, ref_by=None):
     user = get_user(user_id)
@@ -546,40 +578,40 @@ async def welcome(target, user_id, username, ref_by=None):
     max_wd = get_max_withdrawal()
     
     text = (
-        "✨ *Добро пожаловать в CryptoExchangeBot* ✨\n\n"
-        "Этот бот поможет вам обменять криптовалюту на рубли по выгодному курсу.\n\n"
-        "📌 *Как это работает*\n"
-        "1️⃣ Выберите криптовалюту (TON, USDT TON или USDT TRC20)\n"
-        "2️⃣ Введите сумму, которую хотите обменять (мин. 1 TON или 1 USDT)\n"
-        "3️⃣ Отправьте криптовалюту на указанный кошелёк с обязательным комментарием (memo)\n"
-        "4️⃣ После зачисления рубли поступят на ваш баланс автоматически\n"
-        "5️⃣ Вы можете вывести рубли на карту или счёт\n\n"
-        f"💸 *Комиссия сервиса*: {commission}%\n"
-        f"🎁 *Реферальная программа*: {ref_percent}% от суммы обменов ваших рефералов\n\n"
-        f"💰 *Минимальная сумма вывода*: {min_wd:.0f} ₽\n"
-        f"💰 *Максимальная сумма вывода*: {max_wd:.0f} ₽\n"
-        f"💎 *Минимальная сумма обмена*: 1 TON / 1 USDT\n\n"
-        "⬇️ *Выберите действие*"
+        f"✨ Добро пожаловать в CryptoExchangeBot ✨\n\n"
+        f"Этот бот поможет вам обменять криптовалюту на рубли по выгодному курсу.\n\n"
+        f"📌 Как это работает\n"
+        f"1️⃣ Выберите криптовалюту (TON, USDT TON или USDT TRC20)\n"
+        f"2️⃣ Введите сумму, которую хотите обменять (мин. 1 TON или 1 USDT)\n"
+        f"3️⃣ Отправьте криптовалюту на указанный кошелёк с обязательным комментарием (memo)\n"
+        f"4️⃣ После зачисления рубли поступят на ваш баланс автоматически\n"
+        f"5️⃣ Вы можете вывести рубли на карту или счёт\n\n"
+        f"💸 Комиссия сервиса: {commission}%\n"
+        f"🎁 Реферальная программа: {ref_percent}% от суммы обменов ваших рефералов\n\n"
+        f"💰 Минимальная сумма вывода: {min_wd:.0f} ₽\n"
+        f"💰 Максимальная сумма вывода: {max_wd:.0f} ₽\n"
+        f"💎 Минимальная сумма обмена: 1 TON / 1 USDT\n\n"
+        f"⬇️ Выберите действие"
     )
     
     if WELCOME_IMAGE_URL and isinstance(target, types.Message):
         try:
-            await target.answer_photo(WELCOME_IMAGE_URL, caption=text, parse_mode="Markdown", reply_markup=main_kb())
+            await target.answer_photo(WELCOME_IMAGE_URL, caption=text, reply_markup=main_kb())
             return
         except:
             pass
     
     if isinstance(target, types.Message):
-        await target.answer(text, parse_mode="Markdown", reply_markup=main_kb())
+        await target.answer(text, reply_markup=main_kb())
     else:
         try:
-            await target.message.edit_text(text, parse_mode="Markdown", reply_markup=main_kb())
+            await target.message.edit_text(text, reply_markup=main_kb())
         except:
             try:
                 await target.message.delete()
             except:
                 pass
-            await target.message.answer(text, parse_mode="Markdown", reply_markup=main_kb())
+            await target.message.answer(text, reply_markup=main_kb())
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, state: FSMContext):
@@ -610,7 +642,7 @@ async def balance_cb(callback: types.CallbackQuery, state: FSMContext):
         return
     await state.clear()
     bal = get_balance(callback.from_user.id)
-    await edit_message_safe(callback, f"💰 *Ваш баланс*\n\n{bal:.2f} ₽\n\nЗдесь отображаются рубли, полученные за обмен криптовалюты.", back_kb())
+    await edit_message_safe(callback, f"💰 Ваш баланс\n\n{bal:.2f} ₽\n\nЗдесь отображаются рубли, полученные за обмен криптовалюты.", back_kb())
     await callback.answer()
 
 @dp.callback_query(F.data == "exchange")
@@ -621,11 +653,11 @@ async def exchange_menu(callback: types.CallbackQuery, state: FSMContext):
         return
     await state.clear()
     await edit_message_safe(callback, 
-        "🔄 *Обмен криптовалюты на рубли*\n\n"
+        "🔄 Обмен криптовалюты на рубли\n\n"
         "Выберите криптовалюту, которую хотите обменять\n\n"
-        "💎 *TON* - нативный токен сети TON (мин. 1 TON)\n"
-        "💰 *USDT (TON)* - стейблкоин в сети TON (мин. 1 USDT)\n"
-        "💵 *USDT (TRC20)* - стейблкоин в сети TRON (мин. 1 USDT)",
+        "💎 TON - нативный токен сети TON (мин. 1 TON)\n"
+        "💰 USDT (TON) - стейблкоин в сети TON (мин. 1 USDT)\n"
+        "💵 USDT (TRC20) - стейблкоин в сети TRON (мин. 1 USDT)",
         exchange_kb())
     await callback.answer()
 
@@ -646,7 +678,7 @@ async def exch_select(callback: types.CallbackQuery, state: FSMContext):
     rate = get_exchange_rate(crypto)
     commission = get_commission()
     await edit_message_safe(callback,
-        f"🔄 *Обмен {crypto.upper()} на рубли*\n\n"
+        f"🔄 Обмен {crypto.upper()} на рубли\n\n"
         f"Текущий курс: 1 {crypto.upper()} = {rate:.2f} ₽\n"
         f"Комиссия сервиса: {commission}%\n"
         f"Минимальная сумма: {MIN_EXCHANGE} {crypto.upper()}\n\n"
@@ -681,13 +713,12 @@ async def exch_amount(message: types.Message, state: FSMContext):
     
     await state.update_data(amount=amount, net=net)
     await message.answer(
-        f"🔄 *Обмен {crypto.upper()}*\n\n"
+        f"🔄 Обмен {crypto.upper()}\n\n"
         f"Сумма: {amount:.4f} {crypto.upper()}\n"
         f"Курс: 1 {crypto.upper()} = {rate:.2f} ₽\n"
         f"Комиссия ({commission}%): -{fee:.2f} ₽\n"
-        f"Вы получите: *{net:.2f} ₽*\n\n"
+        f"Вы получите: {net:.2f} ₽\n\n"
         "Подтверждаете обмен?",
-        parse_mode="Markdown",
         reply_markup=confirm_kb())
 
 @dp.callback_query(F.data == "confirm")
@@ -714,17 +745,17 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
     
     if crypto in ('usdt_ton', 'usdt_trc20'):
         text = (
-            f"🔄 *Обмен {crypto.upper()}*\n\n"
-            f"📤 *Отправьте на адрес:*\n"
-            f"`{address}`\n\n"
-            f"📝 *Обязательный комментарий (memo):*\n"
-            f"`{memo}`\n\n"
-            f"💰 *Вы получите:* {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
-            f"⚡️ *ВАЖНО!*\n"
+            f"🔄 Обмен {crypto.upper()}\n\n"
+            f"📤 Отправьте на адрес:\n"
+            f"{address}\n\n"
+            f"📝 Обязательный комментарий (memo):\n"
+            f"{memo}\n\n"
+            f"💰 Вы получите: {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
+            f"⚡️ ВАЖНО!\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
             f"• Обязательно укажите комментарий (memo) ТОЧНО как написано выше\n"
             f"• Без правильного комментария средства не будут зачислены!\n\n"
-            f"✅ *После отправки нажмите кнопку «Проверить обмен»*\n\n"
+            f"✅ После отправки нажмите кнопку «Проверить обмен»\n\n"
             f"👨‍💼 Администратор проверит транзакцию и зачислит средства на баланс."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -733,20 +764,20 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
         ])
     else:
         text = (
-            f"🔄 *Обмен {crypto.upper()}*\n\n"
-            f"📤 *Отправьте на адрес:*\n"
-            f"`{address}`\n\n"
-            f"📝 *Обязательный комментарий (memo):*\n"
-            f"`{memo}`\n\n"
-            f"💰 *Вы получите:* {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
-            f"⚡️ *ВАЖНО!*\n"
+            f"🔄 Обмен {crypto.upper()}\n\n"
+            f"📤 Отправьте на адрес:\n"
+            f"{address}\n\n"
+            f"📝 Обязательный комментарий (memo):\n"
+            f"{memo}\n\n"
+            f"💰 Вы получите: {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
+            f"⚡️ ВАЖНО!\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
             f"• Обязательно укажите комментарий (memo) ТОЧНО как написано выше\n"
             f"• Без правильного комментария средства не будут зачислены!\n\n"
-            f"🤖 *Автоматическое зачисление*\n"
+            f"🤖 Автоматическое зачисление\n"
             f"• После отправки рубли поступят на баланс автоматически\n"
             f"• Обычно это занимает 1-5 минут\n\n"
-            f"⚠️ *Если прошло больше 10 минут - нажмите кнопку «Проверить»*"
+            f"⚠️ Если прошло больше 10 минут - нажмите кнопку «Проверить»"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔍 Проверить", callback_data=f"check_ton_{deposit_id}")],
@@ -796,11 +827,10 @@ async def check_ton_manual(callback: types.CallbackQuery):
         
         await bot.send_message(
             dep[1],
-            f"✅ *Обмен TON подтверждён!*\n\n"
+            f"✅ Обмен TON подтверждён!\n\n"
             f"💰 Зачислено: {rub:.2f} ₽\n"
             f"📊 Курс: {rate:.2f} ₽\n"
-            f"💸 Комиссия: {fee:.2f} ₽",
-            parse_mode="Markdown"
+            f"💸 Комиссия: {fee:.2f} ₽"
         )
         
         await edit_message_safe(callback, "✅ Транзакция найдена! Средства зачислены.", back_kb())
@@ -847,15 +877,14 @@ async def check_usdt(callback: types.CallbackQuery):
         try:
             await bot.send_message(
                 admin_id,
-                f"📢 *Запрос на подтверждение USDT обмена*\n\n"
-                f"👤 Пользователь: `{dep[1]}`\n"
+                f"📢 Запрос на подтверждение USDT обмена\n\n"
+                f"👤 Пользователь: {dep[1]}\n"
                 f"💎 Валюта: {dep[2].upper()}\n"
                 f"📊 Сумма: {dep[4]:.4f} {dep[2].upper()}\n"
-                f"📝 Memo: `{dep[3]}`\n"
+                f"📝 Memo: {dep[3]}\n"
                 f"💰 К получению: {net:.2f} ₽\n\n"
-                f"💰 Кошелёк для проверки: `{WALLETS[dep[2]]}`\n\n"
+                f"💰 Кошелёк для проверки: {WALLETS[dep[2]]}\n\n"
                 f"Проверьте транзакцию и подтвердите.",
-                parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_usdt_{deposit_id}"),
                      InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_usdt_{deposit_id}")]
@@ -866,7 +895,7 @@ async def check_usdt(callback: types.CallbackQuery):
             logger.error(f"Error sending to admin {admin_id}: {e}")
     
     if admin_sent:
-        text = f"🔄 *Обмен {dep[2].upper()}*\n\n✅ Запрос на проверку отправлен администратору.\nПожалуйста, ожидайте подтверждения.\n\nСтатус заявки: ожидает проверки."
+        text = f"🔄 Обмен {dep[2].upper()}\n\n✅ Запрос на проверку отправлен администратору.\nПожалуйста, ожидайте подтверждения.\n\nСтатус заявки: ожидает проверки."
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]
         ])
@@ -900,12 +929,11 @@ async def confirm_usdt(callback: types.CallbackQuery):
     
     await bot.send_message(
         dep[1],
-        f"✅ *Обмен {dep[2].upper()} подтверждён!*\n\n"
+        f"✅ Обмен {dep[2].upper()} подтверждён!\n\n"
         f"💰 Зачислено: {rub:.2f} ₽\n"
         f"📊 Курс: {rate:.2f} ₽\n"
         f"💸 Комиссия: {gross * commission / 100:.2f} ₽\n\n"
-        f"💵 Теперь вы можете вывести средства на карту через меню «Вывести».",
-        parse_mode="Markdown"
+        f"💵 Теперь вы можете вывести средства на карту через меню «Вывести»."
     )
     
     await edit_message_safe(callback, f"✅ Заявка #{deposit_id} подтверждена, средства начислены пользователю.", admin_kb())
@@ -930,9 +958,8 @@ async def reject_usdt(callback: types.CallbackQuery):
     
     await bot.send_message(
         dep[1],
-        f"❌ *Обмен {dep[2].upper()} отклонён администратором.*\n\n"
-        f"Пожалуйста, свяжитесь с поддержкой: {SUPPORT_LINK}",
-        parse_mode="Markdown"
+        f"❌ Обмен {dep[2].upper()} отклонён администратором.\n\n"
+        f"Пожалуйста, свяжитесь с поддержкой: {SUPPORT_LINK}"
     )
     
     await edit_message_safe(callback, f"❌ Заявка #{deposit_id} отклонена.", admin_kb())
@@ -950,12 +977,12 @@ async def withdraw_menu(callback: types.CallbackQuery, state: FSMContext):
     max_wd = get_max_withdrawal()
     
     if bal < min_wd:
-        await edit_message_safe(callback, f"❌ *Недостаточно средств*\n\nВаш баланс: {bal:.2f} ₽\nМинимальная сумма вывода: {min_wd:.0f} ₽", back_kb())
+        await edit_message_safe(callback, f"❌ Недостаточно средств\n\nВаш баланс: {bal:.2f} ₽\nМинимальная сумма вывода: {min_wd:.0f} ₽", back_kb())
         return
     
     await edit_message_safe(callback,
-        f"💸 *Вывод рублей*\n\n"
-        f"💰 Ваш баланс: *{bal:.2f} ₽*\n"
+        f"💸 Вывод рублей\n\n"
+        f"💰 Ваш баланс: {bal:.2f} ₽\n"
         f"📊 Минимальная сумма: {min_wd:.0f} ₽\n"
         f"📊 Максимальная сумма: {max_wd:.0f} ₽\n\n"
         "Введите сумму, которую хотите вывести (в рублях):",
@@ -994,13 +1021,12 @@ async def withdraw_amount(message: types.Message, state: FSMContext):
     
     await state.update_data(amount=amount)
     await message.answer(
-        f"✅ Сумма *{amount:.2f} ₽* принята.\n\n"
-        "📝 *Теперь введите реквизиты для выплаты:*\n\n"
+        f"✅ Сумма {amount:.2f} ₽ принята.\n\n"
+        "📝 Теперь введите реквизиты для выплаты:\n\n"
         "• Номер карты (16 цифр)\n"
         "• Номер счёта\n"
         "• Или номер телефона\n\n"
         "💰 Средства будут переведены после проверки администратором.",
-        parse_mode="Markdown",
         reply_markup=cancel_kb()
     )
     await state.set_state(Withdraw.details)
@@ -1025,38 +1051,31 @@ async def withdraw_details(message: types.Message, state: FSMContext):
     
     amount = data['amount']
     
-    # Снимаем деньги с баланса
     update_balance(message.from_user.id, -amount)
-    
-    # Создаём заявку на вывод
     wid = add_withdrawal(message.from_user.id, amount, details)
     
-    # Отправляем уведомление пользователю
     await message.answer(
-        f"✅ *Заявка на вывод создана!*\n\n"
-        f"📋 Номер заявки: `#{wid}`\n"
-        f"💰 Сумма: *{amount:.2f} ₽*\n"
-        f"📝 Реквизиты: `{clean_text(details)}`\n\n"
+        f"✅ Заявка на вывод создана!\n\n"
+        f"📋 Номер заявки: #{wid}\n"
+        f"💰 Сумма: {amount:.2f} ₽\n"
+        f"📝 Реквизиты: {details}\n\n"
         "⏱ Ожидайте подтверждения администратора.\n"
         "Вы получите уведомление, когда заявка будет обработана.\n\n"
         f"🆘 По вопросам: {SUPPORT_LINK}",
-        parse_mode="Markdown",
         reply_markup=back_kb()
     )
     
-    # Отправляем уведомление администраторам
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
                 admin_id,
-                f"📢 *Новая заявка на вывод!*\n\n"
-                f"📋 Номер: `#{wid}`\n"
-                f"👤 Пользователь: `{message.from_user.id}`\n"
+                f"📢 Новая заявка на вывод!\n\n"
+                f"📋 Номер: #{wid}\n"
+                f"👤 Пользователь: {message.from_user.id}\n"
                 f"👤 Username: @{message.from_user.username or 'нет'}\n"
-                f"💰 Сумма: *{amount:.2f} ₽*\n"
-                f"📝 Реквизиты: `{clean_text(details)}`\n\n"
-                f"Для обработки перейдите в админ-панель: /admin",
-                parse_mode="Markdown"
+                f"💰 Сумма: {amount:.2f} ₽\n"
+                f"📝 Реквизиты: {details}\n\n"
+                f"Для обработки перейдите в админ-панель: /admin"
             )
         except:
             pass
@@ -1079,11 +1098,11 @@ async def referrals_cb(callback: types.CallbackQuery, state: FSMContext):
     bonus = c.fetchone()[0] or 0
     ref_percent = get_referral_percent()
     await edit_message_safe(callback,
-        f"👥 *Реферальная программа*\n\n"
-        f"🔗 Ваша реферальная ссылка:\n`{link}`\n\n"
-        f"👤 Приглашено: *{invited}* чел\n"
-        f"🎁 Заработано бонусов: *{bonus:.2f} ₽*\n\n"
-        f"💡 Вы получаете *{ref_percent}%* от суммы обменов ваших рефералов (после вычета комиссии)\n"
+        f"👥 Реферальная программа\n\n"
+        f"🔗 Ваша реферальная ссылка:\n{link}\n\n"
+        f"👤 Приглашено: {invited} чел\n"
+        f"🎁 Заработано бонусов: {bonus:.2f} ₽\n\n"
+        f"💡 Вы получаете {ref_percent}% от суммы обменов ваших рефералов (после вычета комиссии)\n"
         "Бонусы начисляются автоматически и доступны для вывода.",
         back_kb())
     await callback.answer()
@@ -1100,14 +1119,14 @@ async def history_cb(callback: types.CallbackQuery, state: FSMContext):
     c.execute("SELECT amount, status, created_at FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC LIMIT 10", (callback.from_user.id,))
     wd = c.fetchall()
     
-    text = "📜 *История операций*\n\n"
+    text = "📜 История операций\n\n"
     if dep:
-        text += "*🔄 Обмены (пополнения)*\n"
+        text += "🔄 Обмены (пополнения)\n"
         for d in dep:
             date = time.strftime("%d.%m.%Y %H:%M", time.localtime(d[3]))
             text += f"• {d[0].upper()} {d[1]:.4f} - {d[2]} ({date})\n"
     if wd:
-        text += "\n*💸 Выводы*\n"
+        text += "\n💸 Выводы\n"
         for w in wd:
             date = time.strftime("%d.%m.%Y %H:%M", time.localtime(w[2]))
             text += f"• {w[0]:.2f} ₽ - {w[1]} ({date})\n"
@@ -1120,11 +1139,11 @@ async def history_cb(callback: types.CallbackQuery, state: FSMContext):
 async def admin_cmd(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
         return
-    await message.answer("🛡 *Панель администратора*", parse_mode="Markdown", reply_markup=admin_kb())
+    await message.answer("🛡 Панель администратора", reply_markup=admin_kb())
 
 @dp.callback_query(F.data == "admin_back")
 async def admin_back(callback: types.CallbackQuery):
-    await edit_message_safe(callback, "🛡 *Панель администратора*", admin_kb())
+    await edit_message_safe(callback, "🛡 Панель администратора", admin_kb())
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_exit")
@@ -1141,12 +1160,11 @@ async def admin_requests(callback: types.CallbackQuery):
     await edit_message_safe(callback, f"📋 Найдено заявок: {len(rows)}", admin_kb())
     for w in rows:
         await callback.message.answer(
-            f"📋 *Заявка #{w[0]}*\n"
-            f"👤 Пользователь: `{w[1]}`\n"
+            f"📋 Заявка #{w[0]}\n"
+            f"👤 Пользователь: {w[1]}\n"
             f"💰 Сумма: {w[2]:.2f} ₽\n"
-            f"📝 Реквизиты: `{clean_text(w[3])}`\n"
+            f"📝 Реквизиты: {w[3]}\n"
             f"🏷 Статус: {w[4]}",
-            parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"approve_{w[0]}"),
                  InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{w[0]}")]
@@ -1163,7 +1181,7 @@ async def approve_req(callback: types.CallbackQuery):
     w = get_withdrawal(wid)
     if w:
         update_withdrawal_status(wid, 'completed')
-        await bot.send_message(w[1], f"✅ *Вывод #{wid} выполнен*\n\nСредства отправлены на указанные реквизиты.", parse_mode="Markdown")
+        await bot.send_message(w[1], f"✅ Вывод #{wid} выполнен\n\nСредства отправлены на указанные реквизиты.")
         await callback.message.edit_text(f"✅ Заявка #{wid} подтверждена")
     await callback.answer()
 
@@ -1174,7 +1192,7 @@ async def reject_start(callback: types.CallbackQuery, state: FSMContext):
         return
     wid = int(callback.data.split("_")[1])
     await state.update_data(wid=wid)
-    await edit_message_safe(callback, "❌ *Отклонение заявки*\n\nВведите причину отклонения:", admin_kb())
+    await edit_message_safe(callback, "❌ Отклонение заявки\n\nВведите причину отклонения:", admin_kb())
     await state.set_state(AdminReject.comment)
     await callback.answer()
 
@@ -1186,7 +1204,7 @@ async def reject_comment(message: types.Message, state: FSMContext):
     if w:
         update_withdrawal_status(wid, 'rejected', message.text)
         update_balance(w[1], w[2])
-        await bot.send_message(w[1], f"❌ *Вывод #{wid} отклонён*\nПричина: {clean_text(message.text)}", parse_mode="Markdown")
+        await bot.send_message(w[1], f"❌ Вывод #{wid} отклонён\nПричина: {message.text}")
         await message.answer(f"✅ Заявка #{wid} отклонена, средства возвращены.", reply_markup=admin_kb())
     else:
         await message.answer("❌ Заявка не найдена.", reply_markup=admin_kb())
@@ -1200,7 +1218,7 @@ async def admin_stats(callback: types.CallbackQuery):
     c.execute("SELECT COUNT(*) FROM users WHERE ref_by > 0")
     referred = c.fetchone()[0]
     await edit_message_safe(callback,
-        f"📊 *Статистика*\n\n"
+        f"📊 Статистика\n\n"
         f"👥 Пользователей: {users}\n"
         f"👥 Приглашённых: {referred}\n"
         f"💰 Депозитов: {deposits:.2f} ₽\n"
@@ -1215,7 +1233,7 @@ async def admin_limits_menu(callback: types.CallbackQuery, state: FSMContext):
     min_wd = get_min_withdrawal()
     max_wd = get_max_withdrawal()
     await edit_message_safe(callback,
-        f"💵 *Лимиты вывода*\n\n"
+        f"💵 Лимиты вывода\n\n"
         f"📊 Минимальная сумма: {min_wd:.0f} ₽\n"
         f"📊 Максимальная сумма: {max_wd:.0f} ₽\n\n"
         f"Введите новый минимальный лимит:",
@@ -1258,7 +1276,7 @@ async def admin_limits_max(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "admin_rates")
 async def admin_rates_menu(callback: types.CallbackQuery):
-    await edit_message_safe(callback, "🔧 *Управление курсами*\n\nВыберите валюту:", InlineKeyboardMarkup(inline_keyboard=[
+    await edit_message_safe(callback, "🔧 Управление курсами\n\nВыберите валюту:", InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 TON", callback_data="rate_ton")],
         [InlineKeyboardButton(text="💵 USDT", callback_data="rate_usdt")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_back")]
@@ -1272,7 +1290,7 @@ async def admin_rate_select(callback: types.CallbackQuery, state: FSMContext):
         crypto = 'usdt'
     await state.update_data(crypto=crypto)
     current = get_exchange_rate(crypto)
-    await edit_message_safe(callback, f"🔧 *Изменение курса {crypto.upper()}*\n\nТекущий курс: {current:.2f} ₽\nВведите новый курс:", admin_kb())
+    await edit_message_safe(callback, f"🔧 Изменение курса {crypto.upper()}\n\nТекущий курс: {current:.2f} ₽\nВведите новый курс:", admin_kb())
     await state.set_state(AdminRate.rate)
     await callback.answer()
 
@@ -1292,10 +1310,10 @@ async def admin_rate_set(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "admin_wallets")
 async def admin_wallets_menu(callback: types.CallbackQuery):
-    text = "💰 *Управление кошельками*\n\n"
+    text = "💰 Управление кошельками\n\n"
     for crypto, wallet in WALLETS.items():
         name = crypto.upper().replace('_', ' ')
-        text += f"• {name}: `{wallet[:20]}...`\n"
+        text += f"• {name}: {wallet[:20]}...\n"
     await edit_message_safe(callback, text, InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 TON", callback_data="wallet_ton")],
         [InlineKeyboardButton(text="💰 USDT TON", callback_data="wallet_usdt_ton")],
@@ -1319,7 +1337,7 @@ async def admin_wallet_select(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(crypto=crypto)
     current = WALLETS[crypto]
     name = crypto.upper().replace('_', ' ')
-    await edit_message_safe(callback, f"🔧 *Изменение кошелька {name}*\n\nТекущий адрес:\n`{current}`\n\nВведите новый адрес:", admin_kb())
+    await edit_message_safe(callback, f"🔧 Изменение кошелька {name}\n\nТекущий адрес:\n{current}\n\nВведите новый адрес:", admin_kb())
     await state.set_state(AdminWallet.address)
     await callback.answer()
 
@@ -1342,7 +1360,7 @@ async def admin_wallet_set(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "admin_commission")
 async def admin_commission_menu(callback: types.CallbackQuery, state: FSMContext):
     current = get_commission()
-    await edit_message_safe(callback, f"⚙️ *Комиссия сервиса*\n\nТекущая комиссия: {current}%\nВведите новое значение (0-100):", admin_kb())
+    await edit_message_safe(callback, f"⚙️ Комиссия сервиса\n\nТекущая комиссия: {current}%\nВведите новое значение (0-100):", admin_kb())
     await state.set_state(AdminCommission.percent)
     await callback.answer()
 
@@ -1362,7 +1380,7 @@ async def admin_commission_set(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "admin_referral")
 async def admin_referral_menu(callback: types.CallbackQuery, state: FSMContext):
     current = get_referral_percent()
-    await edit_message_safe(callback, f"🎁 *Реферальный процент*\n\nТекущий процент: {current}%\nВведите новое значение (0-50):", admin_kb())
+    await edit_message_safe(callback, f"🎁 Реферальный процент\n\nТекущий процент: {current}%\nВведите новое значение (0-50):", admin_kb())
     await state.set_state(AdminReferral.percent)
     await callback.answer()
 
@@ -1381,7 +1399,7 @@ async def admin_referral_set(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "admin_balance")
 async def admin_balance_start(callback: types.CallbackQuery, state: FSMContext):
-    await edit_message_safe(callback, "👤 *Ручное изменение баланса*\n\nВведите Telegram ID пользователя:", admin_kb())
+    await edit_message_safe(callback, "👤 Ручное изменение баланса\n\nВведите Telegram ID пользователя:", admin_kb())
     await state.set_state(AdminBalance.uid)
     await callback.answer()
 
@@ -1410,13 +1428,13 @@ async def admin_balance_amount(message: types.Message, state: FSMContext):
     data = await state.get_data()
     update_balance(data['uid'], amt)
     new_bal = get_balance(data['uid'])
-    await bot.send_message(data['uid'], f"👤 *Изменение баланса*\n\n💰 Сумма: {amt:+.2f} ₽\n💵 Новый баланс: {new_bal:.2f} ₽\n\n👨‍💻 Администратор изменил ваш баланс.", parse_mode="Markdown")
+    await bot.send_message(data['uid'], f"👤 Изменение баланса\n\n💰 Сумма: {amt:+.2f} ₽\n💵 Новый баланс: {new_bal:.2f} ₽\n\n👨‍💻 Администратор изменил ваш баланс.")
     await message.answer(f"✅ Баланс пользователя {data['username']} изменён на {amt:+.2f} ₽\n💰 Новый баланс: {new_bal:.2f} ₽", reply_markup=admin_kb())
     await state.clear()
 
 @dp.callback_query(F.data == "admin_ban")
 async def admin_ban_start(callback: types.CallbackQuery, state: FSMContext):
-    await edit_message_safe(callback, "🚫 *Блокировка пользователя*\n\nВведите Telegram ID пользователя:", admin_kb())
+    await edit_message_safe(callback, "🚫 Блокировка пользователя\n\nВведите Telegram ID пользователя:", admin_kb())
     await state.set_state(AdminBan.uid)
     await callback.answer()
 
@@ -1433,13 +1451,13 @@ async def admin_ban_uid(message: types.Message, state: FSMContext):
         return
     c.execute("UPDATE users SET is_banned = 1 WHERE user_id = ?", (uid,))
     conn.commit()
-    await bot.send_message(uid, f"🚫 *Ваш аккаунт заблокирован*\n\nСвяжитесь с администратором для выяснения причин.\n👉 {SUPPORT_LINK}", parse_mode="Markdown")
+    await bot.send_message(uid, f"🚫 Ваш аккаунт заблокирован\n\nСвяжитесь с администратором для выяснения причин.\n👉 {SUPPORT_LINK}")
     await message.answer(f"✅ Пользователь {user[2]} (ID: {uid}) заблокирован", reply_markup=admin_kb())
     await state.clear()
 
 @dp.callback_query(F.data == "admin_mailing")
 async def admin_mailing(callback: types.CallbackQuery, state: FSMContext):
-    await edit_message_safe(callback, "📢 *Рассылка*\n\nВведите текст сообщения:", admin_kb())
+    await edit_message_safe(callback, "📢 Рассылка\n\nВведите текст сообщения:", admin_kb())
     await state.set_state(AdminMailing.text)
     await callback.answer()
 
@@ -1455,7 +1473,7 @@ async def mailing_send(message: types.Message, state: FSMContext):
         nonlocal success
         async with semaphore:
             try:
-                await bot.send_message(uid, text, parse_mode="Markdown")
+                await bot.send_message(uid, text)
                 success += 1
             except:
                 pass
