@@ -663,12 +663,12 @@ async def exch_amount(message: types.Message, state: FSMContext):
         return
     
     try:
-        amount = float(message.text)
+        amount = float(message.text.replace(',', '.'))
         if amount < MIN_EXCHANGE:
             await message.answer(f"❌ Минимальная сумма обмена: {MIN_EXCHANGE}", reply_markup=cancel_kb())
             return
     except:
-        await message.answer("❌ Введите положительное число (например, 0.5).", reply_markup=cancel_kb())
+        await message.answer("❌ Введите положительное число (например, 1.5).", reply_markup=cancel_kb())
         return
     
     data = await state.get_data()
@@ -950,14 +950,15 @@ async def withdraw_menu(callback: types.CallbackQuery, state: FSMContext):
     max_wd = get_max_withdrawal()
     
     if bal < min_wd:
-        await edit_message_safe(callback, f"❌ *У вас нет средств для вывода*\n\nМинимальная сумма вывода: {min_wd:.0f} ₽", back_kb())
+        await edit_message_safe(callback, f"❌ *Недостаточно средств*\n\nВаш баланс: {bal:.2f} ₽\nМинимальная сумма вывода: {min_wd:.0f} ₽", back_kb())
         return
+    
     await edit_message_safe(callback,
         f"💸 *Вывод рублей*\n\n"
         f"💰 Ваш баланс: *{bal:.2f} ₽*\n"
         f"📊 Минимальная сумма: {min_wd:.0f} ₽\n"
         f"📊 Максимальная сумма: {max_wd:.0f} ₽\n\n"
-        "Введите сумму, которую хотите вывести (в рублях)",
+        "Введите сумму, которую хотите вывести (в рублях):",
         cancel_kb())
     await state.set_state(Withdraw.amount)
     await callback.answer()
@@ -970,26 +971,38 @@ async def withdraw_amount(message: types.Message, state: FSMContext):
         return
     
     try:
-        amount = float(message.text)
+        amount = float(message.text.replace(',', '.'))
         min_wd = get_min_withdrawal()
         max_wd = get_max_withdrawal()
         
         if amount < min_wd:
-            await message.answer(f"❌ Минимальная сумма вывода: {min_wd:.0f} ₽", reply_markup=cancel_kb())
+            await message.answer(f"❌ Минимальная сумма вывода: {min_wd:.0f} ₽\n\nВведите сумму снова:", reply_markup=cancel_kb())
             return
         if amount > max_wd:
-            await message.answer(f"❌ Максимальная сумма вывода: {max_wd:.0f} ₽", reply_markup=cancel_kb())
+            await message.answer(f"❌ Максимальная сумма вывода: {max_wd:.0f} ₽\n\nВведите сумму снова:", reply_markup=cancel_kb())
             return
         bal = get_balance(message.from_user.id)
         if amount > bal:
-            await message.answer(f"❌ Недостаточно средств. Ваш баланс: {bal:.2f} ₽", reply_markup=cancel_kb())
+            await message.answer(f"❌ Недостаточно средств. Ваш баланс: {bal:.2f} ₽\n\nВведите сумму снова:", reply_markup=cancel_kb())
             return
-    except:
-        await message.answer("❌ Введите положительное число (например, 500).", reply_markup=cancel_kb())
+    except ValueError:
+        await message.answer("❌ Введите корректное число (например, 5000).\n\nПопробуйте снова:", reply_markup=cancel_kb())
+        return
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}\n\nПопробуйте снова:", reply_markup=cancel_kb())
         return
     
     await state.update_data(amount=amount)
-    await message.answer("Введите реквизиты для выплаты (номер карты, счёта или телефона):", reply_markup=cancel_kb())
+    await message.answer(
+        f"✅ Сумма *{amount:.2f} ₽* принята.\n\n"
+        "📝 *Теперь введите реквизиты для выплаты:*\n\n"
+        "• Номер карты (16 цифр)\n"
+        "• Номер счёта\n"
+        "• Или номер телефона\n\n"
+        "💰 Средства будут переведены после проверки администратором.",
+        parse_mode="Markdown",
+        reply_markup=cancel_kb()
+    )
     await state.set_state(Withdraw.details)
 
 @dp.message(Withdraw.details)
@@ -1001,22 +1014,53 @@ async def withdraw_details(message: types.Message, state: FSMContext):
     
     details = message.text.strip()
     if len(details) < 5:
-        await message.answer("❌ Введите корректные реквизиты (минимум 5 символов)", reply_markup=cancel_kb())
+        await message.answer("❌ Реквизиты слишком короткие. Введите корректные реквизиты (минимум 5 символов):", reply_markup=cancel_kb())
         return
     
     data = await state.get_data()
+    if not data or 'amount' not in data:
+        await message.answer("❌ Ошибка: сумма не найдена. Начните вывод заново через меню.", reply_markup=main_kb())
+        await state.clear()
+        return
+    
     amount = data['amount']
+    
+    # Снимаем деньги с баланса
     update_balance(message.from_user.id, -amount)
+    
+    # Создаём заявку на вывод
     wid = add_withdrawal(message.from_user.id, amount, details)
+    
+    # Отправляем уведомление пользователю
     await message.answer(
-        f"✅ *Заявка на вывод создана*\n\n"
-        f"📋 Номер заявки: #{wid}\n"
-        f"💰 Сумма: {amount:.2f} ₽\n\n"
+        f"✅ *Заявка на вывод создана!*\n\n"
+        f"📋 Номер заявки: `#{wid}`\n"
+        f"💰 Сумма: *{amount:.2f} ₽*\n"
+        f"📝 Реквизиты: `{clean_text(details)}`\n\n"
         "⏱ Ожидайте подтверждения администратора.\n"
-        "Вы получите уведомление, когда заявка будет обработана.",
+        "Вы получите уведомление, когда заявка будет обработана.\n\n"
+        f"🆘 По вопросам: {SUPPORT_LINK}",
         parse_mode="Markdown",
         reply_markup=back_kb()
     )
+    
+    # Отправляем уведомление администраторам
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"📢 *Новая заявка на вывод!*\n\n"
+                f"📋 Номер: `#{wid}`\n"
+                f"👤 Пользователь: `{message.from_user.id}`\n"
+                f"👤 Username: @{message.from_user.username or 'нет'}\n"
+                f"💰 Сумма: *{amount:.2f} ₽*\n"
+                f"📝 Реквизиты: `{clean_text(details)}`\n\n"
+                f"Для обработки перейдите в админ-панель: /admin",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+    
     await state.clear()
 
 @dp.callback_query(F.data == "referrals")
@@ -1119,7 +1163,7 @@ async def approve_req(callback: types.CallbackQuery):
     w = get_withdrawal(wid)
     if w:
         update_withdrawal_status(wid, 'completed')
-        await bot.send_message(w[1], f"✅ *Вывод #{wid} выполнен*", parse_mode="Markdown")
+        await bot.send_message(w[1], f"✅ *Вывод #{wid} выполнен*\n\nСредства отправлены на указанные реквизиты.", parse_mode="Markdown")
         await callback.message.edit_text(f"✅ Заявка #{wid} подтверждена")
     await callback.answer()
 
