@@ -40,14 +40,22 @@ MIN_EXCHANGE = 1.0
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def clean_text(text):
-    """Очищает текст для безопасного отображения в Markdown"""
+def escape_markdown(text):
+    """Экранирует специальные символы Markdown для обычного текста"""
     if not text:
         return text
-    special_chars = r'_*[]()~`>#+-=|{}.!'
-    for char in special_chars:
-        text = text.replace(char, '\\' + char)
-    return text
+    escape_chars = r'*[]()~`>#+-=|{}.!'
+    result = ''
+    for char in text:
+        if char in escape_chars:
+            result += '\\' + char
+        else:
+            result += char
+    return result
+
+def clean_text(text):
+    """Для обратной совместимости"""
+    return escape_markdown(text)
 
 conn = sqlite3.connect("exchange.db", check_same_thread=False)
 c = conn.cursor()
@@ -297,7 +305,6 @@ async def update_rates_loop():
         await asyncio.sleep(30)
 
 async def check_ton_tx(memo, required_amount, retries=3):
-    """Проверяет транзакцию TON с точной суммой"""
     address = WALLETS['ton']
     apis = [
         f"https://toncenter.com/api/v2/getTransactions?address={address}&limit=100",
@@ -327,7 +334,6 @@ async def check_ton_tx(memo, required_amount, retries=3):
                                         
                                         if tx_memo and tx_memo == memo:
                                             amount = int(in_msg.get('value', 0)) / 1e9
-                                            # Проверяем точное совпадение суммы с погрешностью 0.001
                                             if abs(amount - required_amount) <= 0.001:
                                                 tx_hash = tx.get('transaction_id', {}).get('hash')
                                                 return {'amount': amount, 'tx_hash': tx_hash, 'source': in_msg.get('source')}
@@ -501,7 +507,6 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 async def edit_message_safe(callback: types.CallbackQuery, text, markup=None):
-    """Безопасное редактирование сообщения"""
     try:
         if callback.message and callback.message.text:
             await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
@@ -705,17 +710,15 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
     address = WALLETS[crypto]
     deposit_id = add_deposit(user_id, crypto, memo, amount)
     
-    safe_address = clean_text(address)
-    safe_memo = clean_text(memo)
     commission = get_commission()
     
     if crypto in ('usdt_ton', 'usdt_trc20'):
         text = (
             f"🔄 *Обмен {crypto.upper()}*\n\n"
             f"📤 *Отправьте на адрес:*\n"
-            f"`{safe_address}`\n\n"
+            f"`{address}`\n\n"
             f"📝 *Обязательный комментарий (memo):*\n"
-            f"`{safe_memo}`\n\n"
+            f"`{memo}`\n\n"
             f"💰 *Вы получите:* {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
             f"⚡️ *ВАЖНО!*\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
@@ -732,9 +735,9 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
         text = (
             f"🔄 *Обмен {crypto.upper()}*\n\n"
             f"📤 *Отправьте на адрес:*\n"
-            f"`{safe_address}`\n\n"
+            f"`{address}`\n\n"
             f"📝 *Обязательный комментарий (memo):*\n"
-            f"`{safe_memo}`\n\n"
+            f"`{memo}`\n\n"
             f"💰 *Вы получите:* {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
             f"⚡️ *ВАЖНО!*\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
@@ -848,9 +851,9 @@ async def check_usdt(callback: types.CallbackQuery):
                 f"👤 Пользователь: `{dep[1]}`\n"
                 f"💎 Валюта: {dep[2].upper()}\n"
                 f"📊 Сумма: {dep[4]:.4f} {dep[2].upper()}\n"
-                f"📝 Memo: `{clean_text(dep[3])}`\n"
+                f"📝 Memo: `{dep[3]}`\n"
                 f"💰 К получению: {net:.2f} ₽\n\n"
-                f"💰 Кошелёк для проверки: `{clean_text(WALLETS[dep[2]])}`\n\n"
+                f"💰 Кошелёк для проверки: `{WALLETS[dep[2]]}`\n\n"
                 f"Проверьте транзакцию и подтвердите.",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1033,7 +1036,7 @@ async def referrals_cb(callback: types.CallbackQuery, state: FSMContext):
     ref_percent = get_referral_percent()
     await edit_message_safe(callback,
         f"👥 *Реферальная программа*\n\n"
-        f"🔗 Ваша реферальная ссылка:\n`{clean_text(link)}`\n\n"
+        f"🔗 Ваша реферальная ссылка:\n`{link}`\n\n"
         f"👤 Приглашено: *{invited}* чел\n"
         f"🎁 Заработано бонусов: *{bonus:.2f} ₽*\n\n"
         f"💡 Вы получаете *{ref_percent}%* от суммы обменов ваших рефералов (после вычета комиссии)\n"
@@ -1272,7 +1275,7 @@ async def admin_wallet_select(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(crypto=crypto)
     current = WALLETS[crypto]
     name = crypto.upper().replace('_', ' ')
-    await edit_message_safe(callback, f"🔧 *Изменение кошелька {name}*\n\nТекущий адрес:\n`{clean_text(current)}`\n\nВведите новый адрес:", admin_kb())
+    await edit_message_safe(callback, f"🔧 *Изменение кошелька {name}*\n\nТекущий адрес:\n`{current}`\n\nВведите новый адрес:", admin_kb())
     await state.set_state(AdminWallet.address)
     await callback.answer()
 
