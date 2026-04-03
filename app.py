@@ -40,30 +40,16 @@ MIN_EXCHANGE = 1.0
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def escape_markdown_v2(text):
-    """Экранирование для MarkdownV2"""
-    if not text:
-        return text
-    special_chars = r'_*[]()~`>#+-=|{}.!'
-    for char in special_chars:
-        text = text.replace(char, '\\' + char)
-    return text
-
 def escape_markdown(text):
-    """Экранирование для обычного Markdown"""
     if not text:
         return text
-    # Экранируем только критичные символы
-    special_chars = r'*_`[]()~>#+-=|{}.!'
-    for char in special_chars:
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    for char in escape_chars:
         text = text.replace(char, '\\' + char)
     return text
 
 def clean_text(text):
-    """Очистка текста для безопасного отображения"""
-    if not text:
-        return text
-    return escape_markdown(str(text))
+    return escape_markdown(str(text)) if text else text
 
 conn = sqlite3.connect("exchange.db", check_same_thread=False)
 c = conn.cursor()
@@ -391,21 +377,19 @@ async def check_deposits_loop(bot):
                     
                     await bot.send_message(
                         user_id,
-                        f"✅ *Обмен TON выполнен!*\n\n"
+                        f"✅ Обмен TON выполнен!\n\n"
                         f"💰 Зачислено: {rub:.2f} ₽\n"
                         f"📊 Курс: {rate:.2f} ₽\n"
-                        f"💸 Комиссия: {fee:.2f} ₽",
-                        parse_mode="Markdown"
+                        f"💸 Комиссия: {fee:.2f} ₽"
                     )
                     
                     for admin_id in ADMIN_IDS:
                         await bot.send_message(
                             admin_id,
-                            f"✅ *Новый обмен TON*\n\n"
-                            f"👤 Пользователь: `{user_id}`\n"
+                            f"✅ Новый обмен TON\n\n"
+                            f"👤 Пользователь: {user_id}\n"
                             f"💰 Сумма: {tx['amount']:.4f} TON\n"
-                            f"💵 Выплачено: {rub:.2f} ₽",
-                            parse_mode="Markdown"
+                            f"💵 Выплачено: {rub:.2f} ₽"
                         )
                     
                     logger.info(f"Депозит #{deposit_id}: пользователь {user_id}, сумма {tx['amount']} TON -> {rub} RUB")
@@ -450,7 +434,7 @@ def back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]])
 
 def cancel_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="back")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_withdraw")]])
 
 def confirm_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -514,56 +498,22 @@ class AdminLimits(StatesGroup):
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-async def send_safe_message(target, text, reply_markup=None):
-    """Безопасная отправка сообщения без Markdown"""
-    try:
-        if hasattr(target, 'message'):
-            await target.message.answer(text, reply_markup=reply_markup)
-        else:
-            await target.answer(text, reply_markup=reply_markup)
-    except Exception as e:
-        logger.error(f"Send error: {e}")
-
 async def edit_message_safe(callback: types.CallbackQuery, text, markup=None):
-    """Безопасное редактирование сообщения - без Markdown при ошибке"""
     try:
         if callback.message and callback.message.text:
-            await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
+            await callback.message.edit_text(text, reply_markup=markup)
         else:
             try:
                 await callback.message.delete()
             except:
                 pass
-            await callback.message.answer(text, parse_mode="Markdown", reply_markup=markup)
+            await callback.message.answer(text, reply_markup=markup)
     except Exception as e:
         error_text = str(e).lower()
         if "message is not modified" in error_text:
             pass
-        elif "can't parse entities" in error_text:
-            # Если ошибка в Markdown, отправляем без форматирования
-            logger.warning(f"Markdown error, sending without formatting: {e}")
-            try:
-                if callback.message and callback.message.text:
-                    await callback.message.edit_text(text, reply_markup=markup)
-                else:
-                    await callback.message.answer(text, reply_markup=markup)
-            except:
-                pass
-        elif "message can't be edited" in error_text or "message to edit not found" in error_text:
-            try:
-                await callback.message.delete()
-            except:
-                pass
-            try:
-                await callback.message.answer(text, parse_mode="Markdown", reply_markup=markup)
-            except:
-                await callback.message.answer(text, reply_markup=markup)
         else:
             logger.error(f"Edit error: {e}")
-            try:
-                await callback.message.answer(text, reply_markup=markup)
-            except:
-                pass
 
 async def welcome(target, user_id, username, ref_by=None):
     user = get_user(user_id)
@@ -623,6 +573,11 @@ async def start_cmd(message: types.Message, state: FSMContext):
     args = message.text.split()
     ref = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     await welcome(message, message.from_user.id, message.from_user.username, ref)
+
+@dp.message(Command("cancel"))
+async def cancel_cmd(message: types.Message, state: FSMContext):
+    await state.clear()
+    await welcome(message, message.from_user.id, message.from_user.username)
 
 @dp.callback_query(F.data == "back")
 async def back_cb(callback: types.CallbackQuery, state: FSMContext):
@@ -965,6 +920,8 @@ async def reject_usdt(callback: types.CallbackQuery):
     await edit_message_safe(callback, f"❌ Заявка #{deposit_id} отклонена.", admin_kb())
     await callback.answer()
 
+# ========== ВЫВОД СРЕДСТВ (ПОЛНОСТЬЮ ПЕРЕПИСАН) ==========
+
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_menu(callback: types.CallbackQuery, state: FSMContext):
     user = get_user(callback.from_user.id)
@@ -977,17 +934,35 @@ async def withdraw_menu(callback: types.CallbackQuery, state: FSMContext):
     max_wd = get_max_withdrawal()
     
     if bal < min_wd:
-        await edit_message_safe(callback, f"❌ Недостаточно средств\n\nВаш баланс: {bal:.2f} ₽\nМинимальная сумма вывода: {min_wd:.0f} ₽", back_kb())
+        await callback.answer(f"❌ Недостаточно средств. Минимум: {min_wd:.0f} ₽", show_alert=True)
         return
     
-    await edit_message_safe(callback,
-        f"💸 Вывод рублей\n\n"
+    try:
+        await callback.message.delete()
+    except:
+        pass
+    
+    await callback.message.answer(
+        f"💸 ВЫВОД СРЕДСТВ\n\n"
         f"💰 Ваш баланс: {bal:.2f} ₽\n"
-        f"📊 Минимальная сумма: {min_wd:.0f} ₽\n"
-        f"📊 Максимальная сумма: {max_wd:.0f} ₽\n\n"
-        "Введите сумму, которую хотите вывести (в рублях):",
-        cancel_kb())
+        f"📊 Минимум: {min_wd:.0f} ₽\n"
+        f"📊 Максимум: {max_wd:.0f} ₽\n\n"
+        f"➡️ Введите сумму вывода (только число):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_withdraw")]
+        ])
+    )
     await state.set_state(Withdraw.amount)
+    await callback.answer()
+
+@dp.callback_query(F.data == "cancel_withdraw")
+async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except:
+        pass
+    await welcome(callback, callback.from_user.id, callback.from_user.username)
     await callback.answer()
 
 @dp.message(Withdraw.amount)
@@ -998,36 +973,72 @@ async def withdraw_amount(message: types.Message, state: FSMContext):
         return
     
     try:
-        amount = float(message.text.replace(',', '.'))
-        min_wd = get_min_withdrawal()
-        max_wd = get_max_withdrawal()
-        
-        if amount < min_wd:
-            await message.answer(f"❌ Минимальная сумма вывода: {min_wd:.0f} ₽\n\nВведите сумму снова:", reply_markup=cancel_kb())
-            return
-        if amount > max_wd:
-            await message.answer(f"❌ Максимальная сумма вывода: {max_wd:.0f} ₽\n\nВведите сумму снова:", reply_markup=cancel_kb())
-            return
-        bal = get_balance(message.from_user.id)
-        if amount > bal:
-            await message.answer(f"❌ Недостаточно средств. Ваш баланс: {bal:.2f} ₽\n\nВведите сумму снова:", reply_markup=cancel_kb())
-            return
-    except ValueError:
-        await message.answer("❌ Введите корректное число (например, 5000).\n\nПопробуйте снова:", reply_markup=cancel_kb())
+        amount = float(message.text.replace(',', '.').strip())
+        if amount <= 0:
+            raise ValueError
+    except:
+        await message.answer(
+            "❌ Ошибка! Введите число.\n\n"
+            "Примеры: 1000, 5000.50, 10000\n\n"
+            "➡️ Попробуйте снова:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_withdraw")]
+            ])
+        )
         return
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}\n\nПопробуйте снова:", reply_markup=cancel_kb())
+    
+    min_wd = get_min_withdrawal()
+    max_wd = get_max_withdrawal()
+    bal = get_balance(message.from_user.id)
+    
+    if amount < min_wd:
+        await message.answer(
+            f"❌ Сумма меньше минимума!\n\n"
+            f"Минимальная сумма: {min_wd:.0f} ₽\n"
+            f"Ваша сумма: {amount:.2f} ₽\n\n"
+            f"➡️ Введите сумму снова:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_withdraw")]
+            ])
+        )
+        return
+    
+    if amount > max_wd:
+        await message.answer(
+            f"❌ Сумма больше максимума!\n\n"
+            f"Максимальная сумма: {max_wd:.0f} ₽\n"
+            f"Ваша сумма: {amount:.2f} ₽\n\n"
+            f"➡️ Введите сумму снова:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_withdraw")]
+            ])
+        )
+        return
+    
+    if amount > bal:
+        await message.answer(
+            f"❌ Недостаточно средств!\n\n"
+            f"Ваш баланс: {bal:.2f} ₽\n"
+            f"Запрошено: {amount:.2f} ₽\n\n"
+            f"➡️ Введите сумму снова:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_withdraw")]
+            ])
+        )
         return
     
     await state.update_data(amount=amount)
+    
     await message.answer(
-        f"✅ Сумма {amount:.2f} ₽ принята.\n\n"
-        "📝 Теперь введите реквизиты для выплаты:\n\n"
-        "• Номер карты (16 цифр)\n"
-        "• Номер счёта\n"
-        "• Или номер телефона\n\n"
-        "💰 Средства будут переведены после проверки администратором.",
-        reply_markup=cancel_kb()
+        f"✅ Сумма {amount:.2f} ₽ принята!\n\n"
+        f"📝 Теперь введите реквизиты для перевода:\n\n"
+        f"• Номер карты (16 цифр)\n"
+        f"• Номер счета\n"
+        f"• Номер телефона (СБП)\n\n"
+        f"💰 Средства будут переведены после проверки администратором.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_withdraw")]
+        ])
     )
     await state.set_state(Withdraw.details)
 
@@ -1039,13 +1050,25 @@ async def withdraw_details(message: types.Message, state: FSMContext):
         return
     
     details = message.text.strip()
+    
     if len(details) < 5:
-        await message.answer("❌ Реквизиты слишком короткие. Введите корректные реквизиты (минимум 5 символов):", reply_markup=cancel_kb())
+        await message.answer(
+            "❌ Реквизиты слишком короткие!\n\n"
+            "Введите корректные реквизиты (минимум 5 символов):\n\n"
+            "Пример: 1234 5678 9012 3456",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_withdraw")]
+            ])
+        )
         return
     
     data = await state.get_data()
     if not data or 'amount' not in data:
-        await message.answer("❌ Ошибка: сумма не найдена. Начните вывод заново через меню.", reply_markup=main_kb())
+        await message.answer(
+            "❌ Ошибка! Сумма не найдена.\n\n"
+            "Начните вывод заново: /start",
+            reply_markup=main_kb()
+        )
         await state.clear()
         return
     
@@ -1053,14 +1076,15 @@ async def withdraw_details(message: types.Message, state: FSMContext):
     
     update_balance(message.from_user.id, -amount)
     wid = add_withdrawal(message.from_user.id, amount, details)
+    await state.clear()
     
     await message.answer(
-        f"✅ Заявка на вывод создана!\n\n"
+        f"✅ ЗАЯВКА НА ВЫВОД СОЗДАНА!\n\n"
         f"📋 Номер заявки: #{wid}\n"
         f"💰 Сумма: {amount:.2f} ₽\n"
         f"📝 Реквизиты: {details}\n\n"
-        "⏱ Ожидайте подтверждения администратора.\n"
-        "Вы получите уведомление, когда заявка будет обработана.\n\n"
+        f"⏱ Статус: Ожидает проверки\n"
+        f"👨‍💼 Администратор обработает заявку в ближайшее время\n\n"
         f"🆘 По вопросам: {SUPPORT_LINK}",
         reply_markup=back_kb()
     )
@@ -1069,18 +1093,19 @@ async def withdraw_details(message: types.Message, state: FSMContext):
         try:
             await bot.send_message(
                 admin_id,
-                f"📢 Новая заявка на вывод!\n\n"
-                f"📋 Номер: #{wid}\n"
+                f"🆕 НОВАЯ ЗАЯВКА НА ВЫВОД #{wid}\n\n"
                 f"👤 Пользователь: {message.from_user.id}\n"
-                f"👤 Username: @{message.from_user.username or 'нет'}\n"
+                f"📝 Username: @{message.from_user.username or 'нет'}\n"
                 f"💰 Сумма: {amount:.2f} ₽\n"
                 f"📝 Реквизиты: {details}\n\n"
-                f"Для обработки перейдите в админ-панель: /admin"
+                f"➡️ /admin - для обработки"
             )
         except:
             pass
     
-    await state.clear()
+    logger.info(f"Заявка на вывод #{wid}: пользователь {message.from_user.id}, сумма {amount} ₽")
+
+# ========== ОСТАЛЬНЫЕ ФУНКЦИИ ==========
 
 @dp.callback_query(F.data == "referrals")
 async def referrals_cb(callback: types.CallbackQuery, state: FSMContext):
