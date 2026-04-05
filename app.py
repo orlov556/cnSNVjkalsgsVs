@@ -702,9 +702,9 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
         text = (
             f"🔄 Обмен {crypto.upper()}\n\n"
             f"📤 Отправьте на адрес:\n"
-            f"{address}\n\n"
+            f"`{address}`\n\n"
             f"📝 Обязательный комментарий (memo):\n"
-            f"{memo}\n\n"
+            f"`{memo}`\n\n"
             f"💰 Вы получите: {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
             f"⚡️ ВАЖНО!\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
@@ -721,9 +721,9 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
         text = (
             f"🔄 Обмен {crypto.upper()}\n\n"
             f"📤 Отправьте на адрес:\n"
-            f"{address}\n\n"
+            f"`{address}`\n\n"
             f"📝 Обязательный комментарий (memo):\n"
-            f"{memo}\n\n"
+            f"`{memo}`\n\n"
             f"💰 Вы получите: {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
             f"⚡️ ВАЖНО!\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
