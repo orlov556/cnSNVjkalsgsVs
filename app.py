@@ -702,9 +702,9 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
         text = (
             f"🔄 Обмен {crypto.upper()}\n\n"
             f"📤 Отправьте на адрес:\n"
-            f"`{address}`\n\n"
+            f"<code>{address}</code>\n\n"
             f"📝 Обязательный комментарий (memo):\n"
-            f"`{memo}`\n\n"
+            f"<code>{memo}</code>\n\n"
             f"💰 Вы получите: {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
             f"⚡️ ВАЖНО!\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
@@ -721,9 +721,9 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
         text = (
             f"🔄 Обмен {crypto.upper()}\n\n"
             f"📤 Отправьте на адрес:\n"
-            f"`{address}`\n\n"
+            f"<code>{address}</code>\n\n"
             f"📝 Обязательный комментарий (memo):\n"
-            f"`{memo}`\n\n"
+            f"<code>{memo}</code>\n\n"
             f"💰 Вы получите: {net:.2f} ₽ (после вычета комиссии {commission}%)\n\n"
             f"⚡️ ВАЖНО!\n"
             f"• Переводите ТОЛЬКО {crypto.upper()} на указанный адрес\n"
@@ -739,7 +739,12 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]
         ])
     
-    await edit_message_safe(callback, text, kb)
+    # Удаляем предыдущее сообщение и отправляем новое с HTML-форматированием
+    try:
+        await callback.message.delete()
+    except:
+        pass
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await state.clear()
     await callback.answer()
 
