@@ -20,7 +20,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(",") if id.strip()]
 WELCOME_IMAGE_URL = os.environ.get("WELCOME_IMAGE_URL", "")
-SUPPORT_LINK = "https://t.me/cryptohelp_01"
+SUPPORT_LINK = "https://t.me/cryptohelp_official"
 
 TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
 USDT_TON_WALLET = "UQAunfNNErk6s1VC4ycJD2UI_U7aAK53M1LM1ebAv4vbqcDs"
@@ -140,6 +140,7 @@ def complete_deposit(deposit_id, amount_crypto, rub_amount, user_id, tx_hash=Non
               (amount_crypto, int(time.time()), tx_hash, deposit_id))
     conn.commit()
     
+    # НАЧИСЛЕНИЕ РЕФЕРАЛЬНЫХ БОНУСОВ
     c.execute("SELECT ref_by FROM users WHERE user_id = ?", (user_id,))
     ref = c.fetchone()
     if ref and ref[0]:
@@ -147,11 +148,13 @@ def complete_deposit(deposit_id, amount_crypto, rub_amount, user_id, tx_hash=Non
         ref_pct = float(c.fetchone()[0])
         bonus = rub_amount * ref_pct / 100
         if bonus > 0:
+            # Начисляем бонус рефереру
             update_balance(ref[0], bonus)
             c.execute("UPDATE users SET ref_bonus = ref_bonus + ? WHERE user_id = ?", (bonus, ref[0]))
             c.execute("INSERT INTO referral_earnings (user_id, from_user_id, amount, created_at) VALUES (?, ?, ?, ?)",
                       (ref[0], user_id, bonus, int(time.time())))
             conn.commit()
+            logger.info(f"Реферальный бонус: {bonus:.2f} ₽ начислен пользователю {ref[0]} от {user_id}")
 
 def add_withdrawal(user_id, amount, details):
     c.execute("INSERT INTO withdrawals (user_id, amount, details, status, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -739,7 +742,6 @@ async def exch_confirm(callback: types.CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="◀️ В главное меню", callback_data="back")]
         ])
     
-    # Удаляем предыдущее сообщение и отправляем новое с HTML-форматированием
     try:
         await callback.message.delete()
     except:
@@ -925,8 +927,6 @@ async def reject_usdt(callback: types.CallbackQuery):
     await edit_message_safe(callback, f"❌ Заявка #{deposit_id} отклонена.", admin_kb())
     await callback.answer()
 
-# ========== ВЫВОД СРЕДСТВ (ПОЛНОСТЬЮ ПЕРЕПИСАН) ==========
-
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_menu(callback: types.CallbackQuery, state: FSMContext):
     user = get_user(callback.from_user.id)
@@ -1110,8 +1110,6 @@ async def withdraw_details(message: types.Message, state: FSMContext):
     
     logger.info(f"Заявка на вывод #{wid}: пользователь {message.from_user.id}, сумма {amount} ₽")
 
-# ========== ОСТАЛЬНЫЕ ФУНКЦИИ ==========
-
 @dp.callback_query(F.data == "referrals")
 async def referrals_cb(callback: types.CallbackQuery, state: FSMContext):
     user = get_user(callback.from_user.id)
@@ -1127,13 +1125,23 @@ async def referrals_cb(callback: types.CallbackQuery, state: FSMContext):
     c.execute("SELECT ref_bonus FROM users WHERE user_id = ?", (callback.from_user.id,))
     bonus = c.fetchone()[0] or 0
     ref_percent = get_referral_percent()
+    
+    # Получаем сумму всех реферальных начислений
+    c.execute("SELECT SUM(amount) FROM referral_earnings WHERE user_id = ?", (callback.from_user.id,))
+    total_earned = c.fetchone()[0] or 0
+    
     await edit_message_safe(callback,
-        f"👥 Реферальная программа\n\n"
+        f"👥 РЕФЕРАЛЬНАЯ ПРОГРАММА\n\n"
         f"🔗 Ваша реферальная ссылка:\n{link}\n\n"
-        f"👤 Приглашено: {invited} чел\n"
-        f"🎁 Заработано бонусов: {bonus:.2f} ₽\n\n"
-        f"💡 Вы получаете {ref_percent}% от суммы обменов ваших рефералов (после вычета комиссии)\n"
-        "Бонусы начисляются автоматически и доступны для вывода.",
+        f"👤 Приглашено пользователей: {invited}\n"
+        f"🎁 Заработано бонусов: {bonus:.2f} ₽\n"
+        f"💰 Всего начислено за всё время: {total_earned:.2f} ₽\n\n"
+        f"💡 Как это работает:\n"
+        f"• Вы получаете {ref_percent}% от суммы ОБМЕНА ваших рефералов\n"
+        f"• Бонус начисляется ПОСЛЕ вычета комиссии сервиса\n"
+        f"• Пример: реферал обменял на 1000 ₽, комиссия 7% = 930 ₽ чистыми\n"
+        f"• Вы получаете {ref_percent}% от 930 ₽ = {ref_percent * 9.3:.2f} ₽\n\n"
+        f"💰 Бонусы начисляются автоматически и доступны для вывода!",
         back_kb())
     await callback.answer()
 
@@ -1149,7 +1157,7 @@ async def history_cb(callback: types.CallbackQuery, state: FSMContext):
     c.execute("SELECT amount, status, created_at FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC LIMIT 10", (callback.from_user.id,))
     wd = c.fetchall()
     
-    text = "📜 История операций\n\n"
+    text = "📜 ИСТОРИЯ ОПЕРАЦИЙ\n\n"
     if dep:
         text += "🔄 Обмены (пополнения)\n"
         for d in dep:
@@ -1248,13 +1256,13 @@ async def admin_stats(callback: types.CallbackQuery):
     c.execute("SELECT COUNT(*) FROM users WHERE ref_by > 0")
     referred = c.fetchone()[0]
     await edit_message_safe(callback,
-        f"📊 Статистика\n\n"
+        f"📊 СТАТИСТИКА\n\n"
         f"👥 Пользователей: {users}\n"
-        f"👥 Приглашённых: {referred}\n"
-        f"💰 Депозитов: {deposits:.2f} ₽\n"
-        f"💸 Выводов: {withdrawals:.2f} ₽\n"
+        f"👥 Приглашённых (рефералов): {referred}\n"
+        f"💰 Сумма депозитов: {deposits:.2f} ₽\n"
+        f"💸 Сумма выводов: {withdrawals:.2f} ₽\n"
         f"💵 В обороте: {deposits - withdrawals:.2f} ₽\n"
-        f"🎁 Реферальных бонусов: {ref_bonus:.2f} ₽",
+        f"🎁 Выплачено реферальных бонусов: {ref_bonus:.2f} ₽",
         admin_kb())
     await callback.answer()
 
